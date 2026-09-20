@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_SUPERUSER}
+      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD}
+      APP_DB_PASSWORD: ${DB_PASSWORD}
+      APP_ALLOWED_CIDR: ${APP_ALLOWED_CIDR}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./001-init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
+    ports:
+      # Écoute UNIQUEMENT sur l'IP de cette VM, jamais sur 0.0.0.0.
+      # Si tu changes l'IP de la VM BDD, change-la ici aussi.
+      - "192.168.122.51:5432:5432"
+
+volumes:
+  db_data:

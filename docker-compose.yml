@@ -1,26 +1,12 @@
+# Nouveau docker-compose.yml de la VM WEB, une fois la base déportée.
+# Remplace l'ancien fichier par celui-ci (garde le même nom : docker-compose.yml).
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_SUPERUSER}
-      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD}
-      APP_DB_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./db/001-init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
-    networks:
-      - backend
-    # Pas de "ports:" ici -> le port 5432 n'est pas exposé sur l'hôte,
-    # seule l'appli (sur le même réseau "backend") peut atteindre la base.
-
   app:
     build: ./app
     restart: unless-stopped
     environment:
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
-      DB_HOST: db
+      DB_HOST: ${DB_HOST}
       DB_PORT: 5432
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
@@ -29,12 +15,9 @@ services:
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
       SEED_SECRETARY_USER: ${SEED_SECRETARY_USER}
       SEED_SECRETARY_PASSWORD: ${SEED_SECRETARY_PASSWORD}
-    depends_on:
-      - db
     networks:
-      - backend
       - frontend
-    # Pas de "ports:" non plus -> seul nginx est joignable depuis l'extérieur du conteneur.
+    # Toujours aucun port publié : nginx reste le seul point d'entrée.
 
   nginx:
     image: nginx:1.27-alpine
@@ -52,7 +35,3 @@ services:
 
 networks:
   frontend:
-  backend:
-
-volumes:
-  db_data:
