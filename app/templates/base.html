@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Cabinet médical{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #f4f6f8; --card: #ffffff; --ink: #1c2733; --muted: #5b6b7a;
+      --accent: #2563eb; --danger: #dc2626; --border: #e2e8f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--ink);
+    }
+    header {
+      background: var(--card); border-bottom: 1px solid var(--border);
+      padding: 14px 24px; display: flex; justify-content: space-between; align-items: center;
+    }
+    header .brand { font-weight: 700; }
+    header nav a { margin-left: 16px; color: var(--muted); text-decoration: none; font-size: 14px; }
+    header nav a:hover { color: var(--accent); }
+    main { max-width: 760px; margin: 32px auto; padding: 0 20px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 28px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    h1 { font-size: 20px; margin-top: 0; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 4px; }
+    input, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+    button, .btn {
+      background: var(--accent); color: #fff; border: none; padding: 9px 16px;
+      border-radius: 6px; font-size: 14px; cursor: pointer; text-decoration: none; display: inline-block;
+    }
+    .btn.danger { background: var(--danger); }
+    .flash { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .muted { color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand">🏥 Cabinet médical — portail interne</span>
+    {% if session.get('user_id') %}
+    <nav>
+      <span class="muted">{{ session.get('full_name') }} ({{ session.get('role') }})</span>
+      <a href="{{ url_for('dashboard') }}">Accueil</a>
+      <a href="{{ url_for('patients_list') }}">Patients</a>
+      <a href="{{ url_for('logout') }}">Déconnexion</a>
+    </nav>
+    {% endif %}
+  </header>
+  <main>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Connexion{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Connexion</h1>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.username.label }}</label>
+    {{ form.username(autofocus=true) }}
+    <label>{{ form.password.label }}</label>
+    {{ form.password() }}
+    <div style="margin-top:20px;">
+      <button type="submit">Se connecter</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

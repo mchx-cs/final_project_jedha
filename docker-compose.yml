@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_SUPERUSER}
+      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD}
+      APP_DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/001-init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
+    networks:
+      - backend
+    # Pas de "ports:" ici -> le port 5432 n'est pas exposé sur l'hôte,
+    # seule l'appli (sur le même réseau "backend") peut atteindre la base.
+
+  app:
+    build: ./app
+    restart: unless-stopped
+    environment:
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      SEED_ADMIN_USER: ${SEED_ADMIN_USER}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      SEED_SECRETARY_USER: ${SEED_SECRETARY_USER}
+      SEED_SECRETARY_PASSWORD: ${SEED_SECRETARY_PASSWORD}
+    depends_on:
+      - db
+    networks:
+      - backend
+      - frontend
+    # Pas de "ports:" non plus -> seul nginx est joignable depuis l'extérieur du conteneur.
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - app
+    networks:
+      - frontend
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  db_data:

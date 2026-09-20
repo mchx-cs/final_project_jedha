@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Patients{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Dossiers patients</h1>
+  <p><a class="btn" href="{{ url_for('patients_new') }}">+ Nouveau patient</a></p>
+  <table>
+    <tr><th>Nom</th><th>Prénom</th><th>Naissance</th>{% if session.get('role') == 'medecin' %}<th></th>{% endif %}</tr>
+    {% for p in patients %}
+    <tr>
+      <td>{{ p.last_name }}</td>
+      <td>{{ p.first_name }}</td>
+      <td>{{ p.date_of_birth }}</td>
+      {% if session.get('role') == 'medecin' %}
+      <td>
+        <form method="post" action="{{ url_for('patients_delete', patient_id=p.id) }}" onsubmit="return confirm('Supprimer ce dossier ?');" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn danger" type="submit">Supprimer</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">Aucun patient pour le moment.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

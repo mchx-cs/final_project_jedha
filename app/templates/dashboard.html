@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Accueil{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Bienvenue, {{ session.get('full_name') }}</h1>
+  <p class="muted">Rôle : {{ session.get('role') }}</p>
+  <p><a class="btn" href="{{ url_for('patients_list') }}">Voir les dossiers patients</a></p>
+</div>
+{% endblock %}

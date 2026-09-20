@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Nouveau patient{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Nouveau patient</h1>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.first_name.label }}</label>
+    {{ form.first_name() }}
+    <label>{{ form.last_name.label }}</label>
+    {{ form.last_name() }}
+    <label>{{ form.date_of_birth.label }}</label>
+    {{ form.date_of_birth() }}
+    <label>{{ form.notes.label }}</label>
+    {{ form.notes(rows=4) }}
+    <div style="margin-top:20px;">
+      <button type="submit">Enregistrer</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
