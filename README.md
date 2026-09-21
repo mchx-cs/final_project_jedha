@@ -1,91 +1,146 @@
-# Portail web + base de données — Cabinet médical (Medical Office)
+# Portail interne — Cabinet médical
 
-Ta partie du projet final Jedha : serveur web + base de données, sécurisés dès le départ
-plutôt qu'en rattrapage. Tout tourne en conteneurs Docker, comme prévu dans le cadrage.
+Brique « serveur web + base de données » de l'infrastructure du projet final Jedha,
+profil *Medical Office*. Portail de consultation des dossiers patients, déployé en
+conteneurs sur deux machines distinctes.
 
-## Vue d'ensemble
+## Architecture
 
 ```mermaid
 flowchart LR
-    U["Navigateur<br/>(praticien / secrétariat)"] -->|HTTPS 443| N[nginx<br/>reverse proxy + TLS]
-    N -->|HTTP interne, réseau frontend| A[Flask<br/>app web]
-    A -->|SQL paramétré, réseau backend| D[(PostgreSQL<br/>app_user)]
+    C["Praticien<br/>réseau du lab"] -->|HTTPS 443| G["VM GNS3<br/>redirection 8443"]
+    G -->|443| W["VM web — 192.168.122.50<br/>nginx + Flask/Gunicorn"]
+    W -->|5432 · app_user| D["VM BDD — 192.168.122.51<br/>PostgreSQL 16"]
 ```
 
-- **nginx** est le seul conteneur exposé sur l'hôte (ports 80/443). Il termine le TLS et
-  redirige tout le HTTP vers HTTPS.
-- **Flask** n'est joignable que depuis nginx (réseau Docker `frontend`), jamais directement
-  depuis l'extérieur.
-- **PostgreSQL** n'est joignable que depuis l'appli (réseau Docker `backend`), jamais depuis
-  l'extérieur ni depuis nginx.
+Le serveur web et la base sont **sur deux machines séparées**. Le serveur web est le seul
+à être joignable depuis le réseau ; la base n'accepte qu'une seule adresse source, un seul
+rôle et une seule base de données. Un compromis du portail ne donne donc pas un accès
+administrateur aux données de santé.
 
-## Pourquoi ces choix (à réutiliser dans ton doc de spec / ton rapport)
+| Machine | Adresse | Rôle | Ports exposés |
+| --- | --- | --- | --- |
+| `web-medical` | 192.168.122.50 | nginx (terminaison TLS, reverse proxy) + application Flask | 80, 443 |
+| `db-medical` | 192.168.122.51 | PostgreSQL 16 | 5432, sur cette seule adresse |
 
-| Risque classique | Ce qui l'évite ici |
+L'accès depuis le réseau du lab passe par une redirection de port sur la VM GNS3 :
+`https://192.168.183.147:8443`.
+
+## Mesures de sécurité
+
+| Risque | Mesure en place |
 | --- | --- |
-| Injection SQL | Toutes les requêtes utilisent des paramètres (`%s`), jamais de concaténation de l'input utilisateur |
-| XSS | Auto-échappement des templates Jinja2 (activé par défaut dans Flask) |
-| CSRF | `Flask-WTF` génère et vérifie un jeton CSRF sur chaque formulaire |
-| Mots de passe en clair / faibles | Hash bcrypt (coût 12), jamais stocké ni loggé en clair |
-| Secrets dans le code | Tout vient de `.env` (jamais commité), l'app refuse de démarrer si une variable manque |
-| Compte DB trop privilégié | L'appli utilise `app_user` (SELECT/INSERT/UPDATE/DELETE seulement), jamais le compte superuser d'init |
-| Interception réseau | TLS obligatoire, HTTP redirigé, HSTS |
-| Élévation horizontale/verticale dans l'appli | RBAC simple : seul le rôle `medecin` peut supprimer un dossier patient |
+| Injection SQL | Requêtes paramétrées exclusivement, aucune concaténation d'entrée utilisateur |
+| XSS | Auto-échappement Jinja2 |
+| CSRF | Jeton vérifié sur chaque formulaire (Flask-WTF) |
+| Vol de session | Cookies `Secure`, `HttpOnly`, `SameSite=Lax`, clé de signature issue de `.env` |
+| Mots de passe | Hachage bcrypt coût 12, jamais stockés ni journalisés en clair |
+| Bruteforce | Limitation nginx sur `/login` : 5 requêtes par minute et par IP, rafale de 5 |
+| Écoute réseau | TLS obligatoire, HTTP redirigé, HSTS 2 ans |
+| Fuite d'information | `server_tokens off`, en-têtes `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` |
+| Élévation de privilèges applicative | Rôles `medecin` / `secretaire`, suppression d'un dossier réservée au médecin |
+| Compromission du serveur web | Base sur une machine distincte, compte superuser injoignable depuis le réseau |
+| Accès direct à la base | `pg_hba.conf` limité à `app_user` depuis 192.168.122.50, plus filtrage `DOCKER-USER` sur le port 5432 |
+| Privilèges excessifs en base | `app_user` dispose de SELECT/INSERT/UPDATE/DELETE sur deux tables, rien de plus |
+| Secrets dans le code | Toutes les valeurs sensibles dans `.env`, exclu du dépôt ; l'application refuse de démarrer si une variable manque |
 
-C'est volontairement un point de départ correct, pas un audit complet — le but est justement
-que vous (ou l'équipe qui vous teste en Mission II) trouviez ce qu'il manque encore
-(rate limiting, verrouillage de compte après échecs répétés, 2FA, logs vers Wazuh, etc.).
+Les journaux applicatifs (connexions réussies et échouées, créations et suppressions de
+dossiers) sont écrits sur la sortie standard, prêts à être collectés par la brique
+monitoring.
 
-## Déploiement (sur une VM Linux avec Docker installé)
+## Déploiement
 
-1. **Copier ce dossier** sur la VM prévue dans la "zone serveurs" du schéma réseau (celle qui
-   accueillera aussi la BDD et, plus tard, le monitoring).
+Les deux machines sont des nœuds Debian 12 dans la topologie GNS3, reliés au même switch
+que le nœud NAT. Le script `db-vm/provision-debian.sh` prépare une machine neuve : nom
+d'hôte, adresse statique persistante, DNS, neutralisation de cloud-init, Docker. Son
+en-tête documente les étapes préalables, dont l'agrandissement du disque.
 
-2. **Configurer les secrets** :
-   ```bash
-   cp .env.example .env
-   openssl rand -hex 32   # à coller dans FLASK_SECRET_KEY
-   # édite .env et remplace toutes les valeurs "change_me_*"
-   ```
+### 1. Base de données (192.168.122.51)
 
-3. **Générer un certificat TLS de lab** (auto-signé — à remplacer par un vrai certificat si ça
-   sort un jour du contexte du lab) :
-   ```bash
-   ./nginx/generate-cert.sh
-   ```
+```bash
+cd db-vm
+cp .env.example .env          # renseigner les quatre valeurs et APP_ALLOWED_CIDR
+docker compose up -d
+docker compose logs db | tail -5
+./protect-db.sh               # filtrage du port 5432
+```
 
-4. **Construire et lancer** :
-   ```bash
-   docker compose build
-   docker compose up -d
-   ```
+Le script d'initialisation crée le schéma, le rôle `app_user` et réécrit `pg_hba.conf`.
+Il ne s'exécute qu'au tout premier démarrage : les valeurs du `.env` doivent donc être
+définitives avant le premier `up`.
 
-5. **Créer les comptes du personnel** (une seule fois) :
-   ```bash
-   docker compose exec app python seed.py
-   ```
+### 2. Serveur web (192.168.122.50)
 
-6. **Tester** : `https://<ip-de-la-vm>/` — le navigateur va avertir à cause du certificat
-   auto-signé, c'est normal en lab (accepte l'exception). Connecte-toi avec le compte
-   `SEED_ADMIN_USER` / `SEED_ADMIN_PASSWORD` défini dans `.env`.
+```bash
+cp .env.example .env          # mêmes DB_NAME / DB_USER / DB_PASSWORD, plus DB_HOST=192.168.122.51
+./nginx/generate-cert.sh
+docker compose build
+docker compose up -d
+docker compose exec app python seed.py
+curl -k https://localhost/ | head -5
+```
 
-## Intégration dans GNS3
+### 3. Publication sur le réseau du lab
 
-Le plus simple : une VM (QEMU, VMware, ou VirtualBox selon ton lab) avec Docker installé,
-ajoutée comme nœud dans ta topologie GNS3, reliée à la zone "serveurs" définie dans le
-cadrage. Docker n'a pas besoin de tourner *dans* GNS3 — GNS3 route le réseau, la VM fait le
-travail. Vérifie juste que la VM peut sortir sur Internet le temps du `docker compose build`
-(pour télécharger les images), avant de la brancher dans le zonage final avec firewall.
+Sur la VM GNS3, redirection du port 8443 vers le serveur web :
 
-## Pour la suite (à articuler avec le reste de l'équipe)
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A PREROUTING -d 192.168.183.147 -p tcp --dport 8443 \
+     -j DNAT --to-destination 192.168.122.50:443
+sudo iptables -I FORWARD -d 192.168.122.50 -p tcp --dport 443 -j ACCEPT
+```
 
-- Brancher les logs applicatifs (déjà loggés sur stdout : connexions réussies/échouées,
-  créations/suppressions de patients) dans Wazuh dès que la brique monitoring est prête.
-- Restreindre l'accès réseau à nginx (443) depuis le firewall périmètre, pas de règle "allow
-  all" vers la zone serveurs.
-- Une fois l'AD en place, discuter avec l'équipe si l'authentification du personnel doit rester
-  locale (comme ici) ou être déléguée à l'AD (LDAP) — c'est un bon sujet pour le document de
-  spécification technique et pour la veille technologique.
-- Garder une trace des étapes de configuration au fur et à mesure : ça te fera gagner du temps
-  pour rédiger le document de spécification technique et pour ton propre rapport si tu dois
-  documenter cette brique en détail.
+Aucune règle de masquage : les adresses sources réelles restent visibles dans les journaux
+nginx, ce qui est nécessaire à la limitation par IP et à l'analyse des accès.
+
+## Exploitation
+
+Arrêt et redémarrage de la pile, sur chaque machine :
+
+```bash
+docker compose down     # jamais -v : le volume contient les données
+docker compose up -d
+```
+
+Les conteneurs sont en `restart: unless-stopped` et repartent seuls au démarrage de la
+machine. Les règles iptables, en revanche, ne survivent pas à un redémarrage : rejouer
+`db-vm/protect-db.sh` sur la base, et la redirection ci-dessus sur la VM GNS3.
+
+Sauvegarde de la base :
+
+```bash
+docker compose exec -T db pg_dump -U postgres_admin medical_office > dump-$(date +%F).sql
+```
+
+Le fichier doit être rapatrié hors de l'infrastructure. Les dumps sont exclus du dépôt.
+
+## Limites connues
+
+Elles sont assumées et documentées plutôt que masquées.
+
+Le certificat TLS est auto-signé, adapté au lab mais pas à une exploitation réelle. La
+liaison entre l'application et la base n'est pas chiffrée : acceptable ici car les deux
+machines sont sur un segment contrôlé, à corriger en contexte de données de santé réel.
+L'authentification du personnel est locale et sans second facteur, en attendant une
+éventuelle délégation à l'annuaire. La limitation de débit freine le bruteforce mais ne
+verrouille pas les comptes après une série d'échecs. Les secrets vivent dans un fichier
+`.env` sur disque et non dans un coffre. Enfin, les journaux ne sont pas encore collectés
+par la brique monitoring.
+
+## Arborescence
+
+```
+.
+├── app/                    Application Flask (code, templates, Dockerfile, seed)
+├── nginx/                  Configuration du reverse proxy et génération du certificat
+├── db-vm/                  Tout ce qui concerne la machine base de données
+│   ├── docker-compose.yml
+│   ├── 001-init.sh         Schéma, rôle applicatif, restriction pg_hba
+│   ├── protect-db.sh       Filtrage du port 5432
+│   └── provision-debian.sh Préparation d'une machine Debian neuve
+├── docker-compose.yml      Pile du serveur web (app + nginx)
+└── .env.example            Variables attendues, sans aucune valeur
+```
+
+Les fichiers `.env`, les certificats, les clés et les dumps ne sont jamais versionnés.
