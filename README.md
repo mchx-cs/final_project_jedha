@@ -1,146 +1,203 @@
-# Portail interne — Cabinet médical
+# Cabinet médical — portail interne et prise de rendez-vous
 
-Brique « serveur web + base de données » de l'infrastructure du projet final Jedha,
-profil *Medical Office*. Portail de consultation des dossiers patients, déployé en
-conteneurs sur deux machines distinctes.
+Brique « serveur web et base de données » de l'infrastructure du projet final Jedha,
+profil *Medical Office*. Deux applications distinctes, trois machines, trois niveaux de
+confiance.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    C["Praticien<br/>réseau du lab"] -->|HTTPS 443| G["VM GNS3<br/>redirection 8443"]
-    G -->|443| W["VM web — 192.168.122.50<br/>nginx + Flask/Gunicorn"]
-    W -->|5432 · app_user| D["VM BDD — 192.168.122.51<br/>PostgreSQL 16"]
+    PA["Patient<br/>réseau ouvert"] -->|HTTPS 8444| G["VM GNS3<br/>redirections"]
+    PR["Praticien<br/>réseau du lab"] -->|HTTPS 8443| G
+    G --> B["VM DMZ — .52<br/>demande de rendez-vous"]
+    G --> W["VM web — .50<br/>portail du cabinet"]
+    B -->|INSERT seul| D[("VM BDD — .51<br/>PostgreSQL 16")]
+    W -->|dossiers + demandes| D
 ```
 
-Le serveur web et la base sont **sur deux machines séparées**. Le serveur web est le seul
-à être joignable depuis le réseau ; la base n'accepte qu'une seule adresse source, un seul
-rôle et une seule base de données. Un compromis du portail ne donne donc pas un accès
-administrateur aux données de santé.
-
-| Machine | Adresse | Rôle | Ports exposés |
+| Machine | Adresse | Rôle | Compte PostgreSQL |
 | --- | --- | --- | --- |
-| `web-medical` | 192.168.122.50 | nginx (terminaison TLS, reverse proxy) + application Flask | 80, 443 |
-| `db-medical` | 192.168.122.51 | PostgreSQL 16 | 5432, sur cette seule adresse |
+| `dmz-rdv` | 192.168.122.52 | Formulaire public de demande de rendez-vous | `booking_user` — `INSERT` sur une table |
+| `web-medical` | 192.168.122.50 | Portail du personnel : dossiers patients, traitement des demandes | `app_user` — lecture/écriture sur trois tables |
+| `db-medical` | 192.168.122.51 | PostgreSQL 16, aucun autre service | superuser, joignable en local uniquement |
 
-L'accès depuis le réseau du lab passe par une redirection de port sur la VM GNS3 :
-`https://192.168.183.147:8443`.
+Le principe qui structure l'ensemble : **plus un service est exposé, moins il peut faire**.
+Le site public, accessible à n'importe qui, ne peut qu'écrire des demandes de rendez-vous
+et ne sait rien relire — pas même ce qu'il vient d'écrire. Le portail du personnel,
+accessible après authentification, manipule les dossiers. La base, elle, ne parle qu'à ces
+deux machines et son compte d'administration n'est joignable que depuis la machine
+elle-même.
+
+Accès depuis le réseau du lab, par redirection sur la VM GNS3 :
+`https://192.168.183.147:8443` pour le portail, `:8444` pour le site patients.
 
 ## Mesures de sécurité
 
-| Risque | Mesure en place |
-| --- | --- |
-| Injection SQL | Requêtes paramétrées exclusivement, aucune concaténation d'entrée utilisateur |
-| XSS | Auto-échappement Jinja2 |
-| CSRF | Jeton vérifié sur chaque formulaire (Flask-WTF) |
-| Vol de session | Cookies `Secure`, `HttpOnly`, `SameSite=Lax`, clé de signature issue de `.env` |
-| Mots de passe | Hachage bcrypt coût 12, jamais stockés ni journalisés en clair |
-| Bruteforce | Limitation nginx sur `/login` : 5 requêtes par minute et par IP, rafale de 5 |
-| Écoute réseau | TLS obligatoire, HTTP redirigé, HSTS 2 ans |
-| Fuite d'information | `server_tokens off`, en-têtes `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` |
-| Élévation de privilèges applicative | Rôles `medecin` / `secretaire`, suppression d'un dossier réservée au médecin |
-| Compromission du serveur web | Base sur une machine distincte, compte superuser injoignable depuis le réseau |
-| Accès direct à la base | `pg_hba.conf` limité à `app_user` depuis 192.168.122.50, plus filtrage `DOCKER-USER` sur le port 5432 |
-| Privilèges excessifs en base | `app_user` dispose de SELECT/INSERT/UPDATE/DELETE sur deux tables, rien de plus |
-| Secrets dans le code | Toutes les valeurs sensibles dans `.env`, exclu du dépôt ; l'application refuse de démarrer si une variable manque |
+### Communes aux deux applications
 
-Les journaux applicatifs (connexions réussies et échouées, créations et suppressions de
-dossiers) sont écrits sur la sortie standard, prêts à être collectés par la brique
-monitoring.
+| Risque | Mesure |
+| --- | --- |
+| Injection SQL | Requêtes paramétrées exclusivement |
+| XSS | Auto-échappement Jinja2 |
+| CSRF | Jeton vérifié sur chaque formulaire |
+| Écoute réseau | TLS obligatoire, HTTP redirigé, HSTS |
+| Divulgation | `server_tokens off`, en-têtes de sécurité portés par nginx seul |
+| Secrets dans le code | Tout dans `.env`, exclu du dépôt, démarrage refusé si une variable manque |
+| Accès direct à la base | `pg_hba.conf` par rôle et par adresse, plus filtrage `DOCKER-USER` sur le port 5432 |
+
+### Portail du personnel
+
+Mots de passe hachés en bcrypt coût 12. Cookies `Secure`, `HttpOnly`, `SameSite=Lax`.
+Limitation à cinq tentatives de connexion par minute et par adresse. Rôles `medecin` et
+`secretaire`, la suppression d'un dossier étant réservée au médecin. Chaque traitement de
+demande enregistre son auteur et son horodatage.
+
+### Site public
+
+Rôle PostgreSQL en écriture seule sur une seule table : aucune lecture possible, sur
+aucune table. Champ piège invisible contre les robots et limitation à deux envois par
+minute et par adresse. Corps de requête plafonné à 32 ko, date bornée à 90 jours,
+longueurs contraintes. `Content-Security-Policy` sans aucun script autorisé. Référence de
+demande tirée au hasard et non séquentielle, pour empêcher toute énumération.
+
+**Aucun compte patient** : le formulaire est anonyme et le cabinet rappelle. Il n'y a donc
+ni base de mots de passe patients à protéger, ni réinitialisation à sécuriser, ni
+énumération de comptes possible.
+
+**Aucune donnée médicale collectée** : nom, contact, date et demi-journée souhaitées, et un
+champ de précisions pratiques plafonné avec avertissement. Le formulaire public reste
+hors du périmètre des données de santé.
 
 ## Déploiement
 
-Les deux machines sont des nœuds Debian 12 dans la topologie GNS3, reliés au même switch
-que le nœud NAT. Le script `db-vm/provision-debian.sh` prépare une machine neuve : nom
-d'hôte, adresse statique persistante, DNS, neutralisation de cloud-init, Docker. Son
-en-tête documente les étapes préalables, dont l'agrandissement du disque.
+Les trois machines sont des nœuds Debian 12 de la topologie GNS3. Le script
+`db-vm/provision-debian.sh` prépare une machine neuve — nom d'hôte, adresse statique,
+DNS, neutralisation de cloud-init, Docker. Son en-tête documente les étapes préalables.
 
-### 1. Base de données (192.168.122.51)
+Deux précautions apprises à nos dépens : vérifier `hostname` avant toute commande
+privilégiée, et poser `preserve_hostname: true` dans `/etc/cloud/cloud.cfg.d/`, faute de
+quoi cloud-init réécrit le nom de la machine au redémarrage suivant.
+
+### 1. Base de données — 192.168.122.51
 
 ```bash
 cd db-vm
-cp .env.example .env          # renseigner les quatre valeurs et APP_ALLOWED_CIDR
+cp .env.example .env          # les quatre valeurs, APP_ALLOWED_CIDR, BOOKING_DB_PASSWORD
 docker compose up -d
-docker compose logs db | tail -5
-./protect-db.sh               # filtrage du port 5432
+./002-appointments.sh         # table des demandes et rôle booking_user
+./protect-db.sh               # port 5432 réservé aux deux machines applicatives
 ```
 
-Le script d'initialisation crée le schéma, le rôle `app_user` et réécrit `pg_hba.conf`.
-Il ne s'exécute qu'au tout premier démarrage : les valeurs du `.env` doivent donc être
-définitives avant le premier `up`.
+Le script d'initialisation ne s'exécute qu'au premier démarrage du conteneur : le `.env`
+doit être définitif avant le premier `up`.
 
-### 2. Serveur web (192.168.122.50)
+### 2. Portail du personnel — 192.168.122.50
 
 ```bash
-cp .env.example .env          # mêmes DB_NAME / DB_USER / DB_PASSWORD, plus DB_HOST=192.168.122.51
+cp .env.example .env          # mêmes identifiants de base, DB_HOST=192.168.122.51
 ./nginx/generate-cert.sh
-docker compose build
-docker compose up -d
+docker compose build && docker compose up -d
 docker compose exec app python seed.py
-curl -k https://localhost/ | head -5
 ```
 
-### 3. Publication sur le réseau du lab
-
-Sur la VM GNS3, redirection du port 8443 vers le serveur web :
+### 3. Site public — 192.168.122.52
 
 ```bash
-sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A PREROUTING -d 192.168.183.147 -p tcp --dport 8443 \
-     -j DNAT --to-destination 192.168.122.50:443
-sudo iptables -I FORWARD -d 192.168.122.50 -p tcp --dport 443 -j ACCEPT
+cd booking-vm
+cp .env.example .env          # DB_PASSWORD = BOOKING_DB_PASSWORD de la VM base
+./nginx/generate-cert.sh
+docker compose build && docker compose up -d
 ```
 
-Aucune règle de masquage : les adresses sources réelles restent visibles dans les journaux
-nginx, ce qui est nécessaire à la limitation par IP et à l'analyse des accès.
+### 4. Publication sur le réseau du lab
+
+Le script `gns3/publish-portal.sh` pose les deux redirections, 8443 vers le portail et
+8444 vers le site public, sans masquage : les adresses sources réelles restent visibles
+dans les journaux, ce qui est nécessaire à la limitation par adresse et à l'analyse des
+accès.
 
 ## Exploitation
-
-Arrêt et redémarrage de la pile, sur chaque machine :
 
 ```bash
 docker compose down     # jamais -v : le volume contient les données
 docker compose up -d
 ```
 
-Les conteneurs sont en `restart: unless-stopped` et repartent seuls au démarrage de la
-machine. Les règles iptables, en revanche, ne survivent pas à un redémarrage : rejouer
-`db-vm/protect-db.sh` sur la base, et la redirection ci-dessus sur la VM GNS3.
+Les conteneurs redémarrent seuls avec leur machine. Les règles iptables, non : rejouer
+`db-vm/protect-db.sh` sur la base et `gns3/publish-portal.sh` sur la VM GNS3 après chaque
+redémarrage.
 
-Sauvegarde de la base :
+Sauvegarde :
 
 ```bash
 docker compose exec -T db pg_dump -U postgres_admin medical_office > dump-$(date +%F).sql
 ```
 
-Le fichier doit être rapatrié hors de l'infrastructure. Les dumps sont exclus du dépôt.
+## Vérifications
+
+Le parcours complet : déposer une demande sur `:8444`, noter la référence, la retrouver
+sur `:8443/rendez-vous` et la confirmer.
+
+Le cloisonnement, depuis la VM DMZ — la vérification la plus parlante du projet :
+
+```bash
+docker compose exec app python -c "
+import os, psycopg2
+c = psycopg2.connect(host=os.environ['DB_HOST'], dbname=os.environ['DB_NAME'],
+                     user=os.environ['DB_USER'], password=os.environ['DB_PASSWORD'])
+cur = c.cursor()
+for table in ('patients', 'staff', 'appointments'):
+    try:
+        cur.execute(f'SELECT count(*) FROM {table}')
+        print(table, '-> lecture AUTORISEE :', cur.fetchone()[0])
+    except Exception as e:
+        print(table, '-> refuse :', str(e).strip().splitlines()[0])
+    c.rollback()
+"
+```
+
+Les trois tables doivent être refusées. Le filtrage réseau se vérifie de la même façon
+depuis une machine tierce : `nc -vz 192.168.122.51 5432` depuis la VM GNS3 ne doit pas
+aboutir.
 
 ## Limites connues
 
-Elles sont assumées et documentées plutôt que masquées.
+Assumées et documentées plutôt que masquées.
 
-Le certificat TLS est auto-signé, adapté au lab mais pas à une exploitation réelle. La
-liaison entre l'application et la base n'est pas chiffrée : acceptable ici car les deux
-machines sont sur un segment contrôlé, à corriger en contexte de données de santé réel.
-L'authentification du personnel est locale et sans second facteur, en attendant une
-éventuelle délégation à l'annuaire. La limitation de débit freine le bruteforce mais ne
-verrouille pas les comptes après une série d'échecs. Les secrets vivent dans un fichier
-`.env` sur disque et non dans un coffre. Enfin, les journaux ne sont pas encore collectés
-par la brique monitoring.
+Les certificats TLS sont auto-signés. La liaison entre les applications et la base n'est
+pas chiffrée : acceptable sur un segment contrôlé, à corriger en contexte réel de données
+de santé. L'authentification du personnel est locale et sans second facteur, en attendant
+une délégation à l'annuaire. La limitation de débit freine le bruteforce mais ne verrouille
+pas les comptes. Les secrets vivent dans des fichiers `.env` sur disque et non dans un
+coffre. La purge des demandes de plus de six mois, annoncée aux patients, n'est pas encore
+automatisée. Le champ de précisions du formulaire public est libre : seul un avertissement
+dissuade d'y écrire une information médicale, là où une liste de choix l'interdirait. Enfin
+les journaux, bien qu'écrits sur la sortie standard et prêts à être collectés, ne sont pas
+encore repris par la brique monitoring.
+
+L'image Debian du template GNS3 embarque par ailleurs des clés d'hôte SSH pré-générées,
+identiques sur toute machine qui en dérive. Le script de provisionnement les régénère, ce
+qui referme une possibilité d'usurpation entre machines du lab.
 
 ## Arborescence
 
 ```
 .
-├── app/                    Application Flask (code, templates, Dockerfile, seed)
-├── nginx/                  Configuration du reverse proxy et génération du certificat
-├── db-vm/                  Tout ce qui concerne la machine base de données
+├── app/                    Portail du personnel (Flask, templates, seed)
+├── nginx/                  Reverse proxy du portail
+├── booking-vm/             Site public de prise de rendez-vous, machine DMZ
+│   ├── app/
+│   ├── nginx/
+│   └── docker-compose.yml
+├── db-vm/                  Machine base de données
 │   ├── docker-compose.yml
-│   ├── 001-init.sh         Schéma, rôle applicatif, restriction pg_hba
+│   ├── 001-init.sh         Schéma, rôle app_user, restriction pg_hba
+│   ├── 002-appointments.sh Table des demandes, rôle booking_user
 │   ├── protect-db.sh       Filtrage du port 5432
-│   └── provision-debian.sh Préparation d'une machine Debian neuve
-├── docker-compose.yml      Pile du serveur web (app + nginx)
-└── .env.example            Variables attendues, sans aucune valeur
+│   └── provision-debian.sh Préparation d'une machine neuve
+├── docker-compose.yml      Pile du portail
+└── .env.example
 ```
 
-Les fichiers `.env`, les certificats, les clés et les dumps ne sont jamais versionnés.
+Les fichiers `.env`, certificats, clés et dumps ne sont jamais versionnés.
