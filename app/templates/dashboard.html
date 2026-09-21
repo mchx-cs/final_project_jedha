@@ -4,6 +4,9 @@
 <div class="card">
   <h1>Bienvenue, {{ session.get('full_name') }}</h1>
   <p class="muted">Rôle : {{ session.get('role') }}</p>
-  <p><a class="btn" href="{{ url_for('patients_list') }}">Voir les dossiers patients</a></p>
+  <p>
+    <a class="btn" href="{{ url_for('patients_list') }}">Dossiers patients</a>
+    <a class="btn" href="{{ url_for('appointments_list') }}">Demandes de rendez-vous{% if en_attente %}<span class="badge">{{ en_attente }}</span>{% endif %}</a>
+  </p>
 </div>
 {% endblock %}

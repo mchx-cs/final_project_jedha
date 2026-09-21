@@ -12,8 +12,8 @@ import psycopg2.extras
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("medical-office")
-# Ces logs partent sur stdout : c'est ce que Wazuh (ou tout collecteur) ira lire
-# une fois la brique monitoring branchée dessus.
+# Ces logs partent sur stdout : c'est ce que Wazuh ira lire une fois la brique
+# monitoring branchée dessus.
 
 app = Flask(__name__)
 
@@ -29,7 +29,7 @@ DB_CONFIG = dict(
     host=os.environ.get("DB_HOST", "db"),
     port=os.environ.get("DB_PORT", "5432"),
     dbname=os.environ["DB_NAME"],
-    user=os.environ["DB_USER"],       # app_user : compte à privilèges limités, jamais le superuser
+    user=os.environ["DB_USER"],       # app_user : compte à privilèges limités
     password=os.environ["DB_PASSWORD"],
 )
 
@@ -85,8 +85,8 @@ def login():
         conn = get_db()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                # Requête paramétrée (%s) : jamais de f-string / concaténation avec l'input
-                # utilisateur -> c'est ce qui protège de l'injection SQL.
+                # Requête paramétrée (%s) : jamais de f-string ni de concaténation
+                # avec l'entrée utilisateur -> protection contre l'injection SQL.
                 cur.execute(
                     "SELECT id, password_hash, role, full_name FROM staff WHERE username = %s",
                     (username,),
@@ -103,7 +103,7 @@ def login():
             logger.info("auth_success user=%s ip=%s", username, request.remote_addr)
             return redirect(url_for("dashboard"))
 
-        # Message volontairement générique : on ne dit pas si c'est le login ou le mdp qui est faux
+        # Message générique : on ne dit pas si c'est le login ou le mot de passe qui est faux
         logger.warning("auth_failure user=%s ip=%s", username, request.remote_addr)
         flash("Identifiants invalides", "error")
 
@@ -120,7 +120,14 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    return render_template("dashboard.html")
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM appointments WHERE status = 'demande'")
+            en_attente = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return render_template("dashboard.html", en_attente=en_attente)
 
 
 @app.route("/patients")
@@ -173,6 +180,55 @@ def patients_delete(patient_id):
         conn.close()
     logger.info("patient_deleted id=%s by=%s", patient_id, session.get("full_name"))
     return redirect(url_for("patients_list"))
+
+
+# --- Demandes de rendez-vous déposées par les patients sur le site public ---
+
+@app.route("/rendez-vous")
+@login_required
+def appointments_list():
+    statut = request.args.get("statut", "demande")
+    if statut not in ("demande", "confirme", "refuse"):
+        abort(400)
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT a.id, a.reference, a.last_name, a.first_name, a.phone, a.email,
+                          a.requested_date, a.slot, a.comment, a.status, a.created_at,
+                          s.full_name AS handled_by_name, a.handled_at
+                   FROM appointments a
+                   LEFT JOIN staff s ON s.id = a.handled_by
+                   WHERE a.status = %s
+                   ORDER BY a.requested_date, a.created_at""",
+                (statut,),
+            )
+            demandes = cur.fetchall()
+    finally:
+        conn.close()
+    return render_template("appointments.html", demandes=demandes, statut=statut)
+
+
+@app.route("/rendez-vous/<int:appointment_id>/<decision>", methods=["POST"])
+@login_required
+def appointments_handle(appointment_id, decision):
+    if decision not in ("confirme", "refuse"):
+        abort(400)
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE appointments
+                   SET status = %s, handled_by = %s, handled_at = now()
+                   WHERE id = %s AND status = 'demande'""",
+                (decision, session["user_id"], appointment_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info("appointment_handled id=%s decision=%s by=%s",
+                appointment_id, decision, session.get("full_name"))
+    return redirect(url_for("appointments_list"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Cabinet médical — Prise de rendez-vous{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #eef3f7; --card: #ffffff; --ink: #16242f; --muted: #5d6f7e;
+      --accent: #0f766e; --danger: #b42318; --border: #dbe4ec;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0 16px; background: var(--bg); color: var(--ink);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.55;
+    }
+    header { max-width: 640px; margin: 40px auto 20px; }
+    header .nom { font-size: 20px; font-weight: 700; }
+    header .sous { color: var(--muted); font-size: 14px; }
+    main { max-width: 640px; margin: 0 auto 60px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 28px; box-shadow: 0 1px 3px rgba(16,36,47,.06);
+    }
+    h1 { font-size: 19px; margin: 0 0 6px; }
+    .intro { color: var(--muted); font-size: 14px; margin: 0 0 22px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 5px; }
+    input, textarea, select {
+      width: 100%; padding: 10px 11px; border: 1px solid var(--border);
+      border-radius: 7px; font-size: 15px; font-family: inherit; background: #fff;
+    }
+    input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .piege { position: absolute; left: -9999px; }
+    button {
+      margin-top: 24px; width: 100%; background: var(--accent); color: #fff;
+      border: none; padding: 12px; border-radius: 7px; font-size: 15px;
+      font-weight: 600; cursor: pointer;
+    }
+    .erreur { color: var(--danger); font-size: 13px; margin-top: 5px; }
+    .bandeau {
+      background: #fef3f2; border: 1px solid #fecdca; color: var(--danger);
+      padding: 10px 13px; border-radius: 7px; font-size: 14px; margin-bottom: 18px;
+    }
+    .note { font-size: 13px; color: var(--muted); margin-top: 22px; }
+    .reference {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 26px;
+      letter-spacing: 2px; margin: 14px 0 6px;
+    }
+    footer { max-width: 640px; margin: 0 auto 40px; font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="nom">Cabinet médical des Trois Tilleuls</div>
+    <div class="sous">12 rue des Tilleuls, Arras — 03 00 00 00 00</div>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <footer>
+    Les informations transmises par ce formulaire servent uniquement à vous recontacter
+    pour fixer un rendez-vous. Elles sont conservées six mois, puis supprimées.
+    Pour toute urgence, composez le 15.
+  </footer>
+</body>
+</html>

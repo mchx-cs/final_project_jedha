@@ -21,7 +21,7 @@
     header .brand { font-weight: 700; }
     header nav a { margin-left: 16px; color: var(--muted); text-decoration: none; font-size: 14px; }
     header nav a:hover { color: var(--accent); }
-    main { max-width: 760px; margin: 32px auto; padding: 0 20px; }
+    main { max-width: 860px; margin: 32px auto; padding: 0 20px; }
     .card {
       background: var(--card); border: 1px solid var(--border); border-radius: 10px;
       padding: 28px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
@@ -30,24 +30,29 @@
     label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 4px; }
     input, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
     button, .btn {
-      background: var(--accent); color: #fff; border: none; padding: 9px 16px;
-      border-radius: 6px; font-size: 14px; cursor: pointer; text-decoration: none; display: inline-block;
+      background: var(--accent); color: #fff; border: none; padding: 7px 13px;
+      border-radius: 6px; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-block;
     }
     .btn.danger { background: var(--danger); }
     .flash { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 14px; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
     .muted { color: var(--muted); font-size: 13px; }
+    .badge {
+      display: inline-block; background: var(--accent); color: #fff; border-radius: 10px;
+      padding: 1px 8px; font-size: 12px; margin-left: 5px;
+    }
   </style>
 </head>
 <body>
   <header>
-    <span class="brand">🏥 Cabinet médical — portail interne</span>
+    <span class="brand">Cabinet médical — portail interne</span>
     {% if session.get('user_id') %}
     <nav>
       <span class="muted">{{ session.get('full_name') }} ({{ session.get('role') }})</span>
       <a href="{{ url_for('dashboard') }}">Accueil</a>
       <a href="{{ url_for('patients_list') }}">Patients</a>
+      <a href="{{ url_for('appointments_list') }}">Rendez-vous</a>
       <a href="{{ url_for('logout') }}">Déconnexion</a>
     </nav>
     {% endif %}

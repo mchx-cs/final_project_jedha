@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Demande enregistrée{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Votre demande est enregistrée</h1>
+  <p class="intro">
+    Le secrétariat vous rappellera pour confirmer le créneau. Conservez cette référence,
+    elle facilitera l'échange si vous nous appelez.
+  </p>
+  <div class="reference">{{ reference }}</div>
+  <p class="note">
+    Aucune confirmation automatique n'est envoyée : tant que le cabinet ne vous a pas
+    rappelé, le rendez-vous n'est pas fixé.
+  </p>
+  <p class="note"><a href="{{ url_for('demande') }}">Envoyer une autre demande</a></p>
+</div>
+{% endblock %}

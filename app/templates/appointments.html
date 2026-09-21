@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Demandes de rendez-vous{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Demandes de rendez-vous</h1>
+  <p class="muted">
+    <a href="{{ url_for('appointments_list', statut='demande') }}">En attente</a> ·
+    <a href="{{ url_for('appointments_list', statut='confirme') }}">Confirmées</a> ·
+    <a href="{{ url_for('appointments_list', statut='refuse') }}">Refusées</a>
+  </p>
+
+  <table>
+    <tr>
+      <th>Réf.</th><th>Patient</th><th>Contact</th><th>Souhait</th>
+      {% if statut == 'demande' %}<th></th>{% else %}<th>Traitée par</th>{% endif %}
+    </tr>
+    {% for d in demandes %}
+    <tr>
+      <td>{{ d.reference }}</td>
+      <td>
+        {{ d.last_name }} {{ d.first_name }}
+        {% if d.comment %}<div class="muted">{{ d.comment }}</div>{% endif %}
+      </td>
+      <td>
+        {{ d.phone }}
+        {% if d.email %}<div class="muted">{{ d.email }}</div>{% endif %}
+      </td>
+      <td>{{ d.requested_date }}<div class="muted">{{ d.slot }}</div></td>
+      {% if statut == 'demande' %}
+      <td style="white-space:nowrap;">
+        <form method="post" action="{{ url_for('appointments_handle', appointment_id=d.id, decision='confirme') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn" type="submit">Confirmer</button>
+        </form>
+        <form method="post" action="{{ url_for('appointments_handle', appointment_id=d.id, decision='refuse') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn danger" type="submit">Refuser</button>
+        </form>
+      </td>
+      {% else %}
+      <td class="muted">{{ d.handled_by_name or '—' }}</td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">Aucune demande dans cette catégorie.</td></tr>
+    {% endfor %}
+  </table>
+
+  <p class="note muted" style="margin-top:18px;">
+    Confirmer une demande n'envoie aucun message au patient : le secrétariat le rappelle
+    au numéro indiqué.
+  </p>
+</div>
+{% endblock %}

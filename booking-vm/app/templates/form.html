@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Demander un rendez-vous</h1>
+  <p class="intro">
+    Remplissez ce formulaire, le secrétariat vous rappelle pour confirmer le créneau.
+    Merci de ne pas indiquer d'information médicale dans vos précisions.
+  </p>
+
+  {% if erreur %}<div class="bandeau">{{ erreur }}</div>{% endif %}
+
+  <form method="post" novalidate>
+    {{ form.hidden_tag() }}
+
+    <label for="last_name">{{ form.last_name.label.text }}</label>
+    {{ form.last_name(id="last_name", autocomplete="family-name") }}
+    {% for e in form.last_name.errors %}<div class="erreur">{{ e }}</div>{% endfor %}
+
+    <label for="first_name">{{ form.first_name.label.text }}</label>
+    {{ form.first_name(id="first_name", autocomplete="given-name") }}
+    {% for e in form.first_name.errors %}<div class="erreur">{{ e }}</div>{% endfor %}
+
+    <label for="phone">{{ form.phone.label.text }}</label>
+    {{ form.phone(id="phone", autocomplete="tel", inputmode="tel") }}
+    {% for e in form.phone.errors %}<div class="erreur">{{ e }}</div>{% endfor %}
+
+    <label for="email">{{ form.email.label.text }}</label>
+    {{ form.email(id="email", autocomplete="email") }}
+    {% for e in form.email.errors %}<div class="erreur">{{ e }}</div>{% endfor %}
+
+    <label for="requested_date">{{ form.requested_date.label.text }}</label>
+    {{ form.requested_date(id="requested_date", type="date") }}
+    {% for e in form.requested_date.errors %}<div class="erreur">{{ e }}</div>{% endfor %}
+
+    <label for="slot">{{ form.slot.label.text }}</label>
+    {{ form.slot(id="slot") }}
+
+    <label for="comment">{{ form.comment.label.text }}</label>
+    {{ form.comment(id="comment", rows=3, maxlength=200,
+                    placeholder="Par exemple : accès en fauteuil roulant, disponible uniquement avant 10h.") }}
+    {% for e in form.comment.errors %}<div class="erreur">{{ e }}</div>{% endfor %}
+
+    <div class="piege" aria-hidden="true">
+      {{ form.website.label }} {{ form.website(tabindex="-1", autocomplete="off") }}
+    </div>
+
+    <button type="submit">Envoyer ma demande</button>
+  </form>
+
+  <p class="note">
+    Ce formulaire n'est pas un service d'urgence. En cas d'urgence vitale, appelez le 15.
+  </p>
+</div>
+{% endblock %}
