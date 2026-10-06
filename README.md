@@ -2,35 +2,56 @@
 
 Brique « serveur web et base de données » de l'infrastructure du projet final Jedha,
 profil *Medical Office*. Deux applications distinctes, trois machines, trois niveaux de
-confiance.
+confiance, réparties dans les VLAN de l'infrastructure et filtrées par pfSense.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    PA["Patient<br/>réseau ouvert"] -->|HTTPS 8444| G["VM GNS3<br/>redirections"]
-    PR["Praticien<br/>réseau du lab"] -->|HTTPS 8443| G
-    G --> B["VM DMZ — .52<br/>demande de rendez-vous"]
-    G --> W["VM web — .50<br/>portail du cabinet"]
-    B -->|INSERT seul| D[("VM BDD — .51<br/>PostgreSQL 16")]
-    W -->|dossiers + demandes| D
+    PA["Patient<br/>réseau du lab"] -->|HTTPS 8444| G["VM GNS3<br/>192.168.183.147"]
+    G -->|HTTPS 443| F["pfSense<br/>WAN 192.168.122.86"]
+    F -->|HTTPS 443| B["dmz-rdv — VLAN 60<br/>192.168.60.2"]
+    PR["Personnel<br/>VLAN 10 et 20"] -->|HTTPS 443| W["web-medical — VLAN 50<br/>192.168.50.3"]
+    B -->|PostgreSQL 5432<br/>INSERT seul| D[("db-medical — VLAN 50<br/>192.168.50.2")]
+    W -->|PostgreSQL 5432| D
 ```
 
-| Machine | Adresse | Rôle | Compte PostgreSQL |
-| --- | --- | --- | --- |
-| `dmz-rdv` | 192.168.122.52 | Formulaire public de demande de rendez-vous | `booking_user` — `INSERT` sur une table |
-| `web-medical` | 192.168.122.50 | Portail du personnel : dossiers patients, traitement des demandes | `app_user` — lecture/écriture sur trois tables |
-| `db-medical` | 192.168.122.51 | PostgreSQL 16, aucun autre service | superuser, joignable en local uniquement |
+| Machine | VLAN | Adresse | Rôle | Compte PostgreSQL |
+| --- | --- | --- | --- | --- |
+| `dmz-rdv` | 60 | 192.168.60.2 | Formulaire public de demande de rendez-vous | `booking_user` — `INSERT` sur une table |
+| `web-medical` | 50 | 192.168.50.3 | Portail du personnel : dossiers patients, traitement des demandes | `app_user` — lecture/écriture sur trois tables |
+| `db-medical` | 50 | 192.168.50.2 | PostgreSQL 16, aucun autre service | superuser, joignable en local uniquement |
+
+Masque `/24`, passerelle `.1` de chaque VLAN (pfSense). Les adresses sont fixes sur les
+machines et réservées par adresse MAC dans le DHCP de pfSense : les deux configurations
+disent la même chose.
 
 Le principe qui structure l'ensemble : **plus un service est exposé, moins il peut faire**.
 Le site public, accessible à n'importe qui, ne peut qu'écrire des demandes de rendez-vous
-et ne sait rien relire — pas même ce qu'il vient d'écrire. Le portail du personnel,
-accessible après authentification, manipule les dossiers. La base, elle, ne parle qu'à ces
-deux machines et son compte d'administration n'est joignable que depuis la machine
-elle-même.
+et ne sait rien relire, pas même ce qu'il vient d'écrire. Le portail du personnel,
+joignable seulement depuis les VLAN du personnel et après authentification, manipule les
+dossiers. La base ne parle qu'à ces deux machines, et son compte d'administration n'est
+joignable que depuis la machine elle-même.
 
-Accès depuis le réseau du lab, par redirection sur la VM GNS3 :
-`https://192.168.183.147:8443` pour le portail, `:8444` pour le site patients.
+Accès :
+
+- site public : `https://192.168.183.147:8444/` depuis le réseau du lab ;
+- portail : `https://192.168.50.3/` depuis les VLAN 10 et 20 uniquement. Il n'est pas publié.
+
+## Flux autorisés
+
+| Source | Destination | Port | Filtrage |
+| --- | --- | --- | --- |
+| Lab | VM GNS3 `192.168.183.147` | 8444 | Redirection vers le WAN de pfSense (`gns3/publish-portal.sh`) |
+| WAN pfSense | `192.168.60.2` | 443 | Redirection pfSense |
+| VLAN 10 et 20 | `192.168.50.3` | 443 | pfSense |
+| `192.168.60.2` | `192.168.50.2` | 5432 | pfSense, puis `DOCKER-USER` et `pg_hba.conf` |
+| `192.168.50.3` | `192.168.50.2` | 5432 | Même VLAN : `DOCKER-USER` et `pg_hba.conf` seulement |
+| Les trois machines | `WAZUH01` `192.168.30.20` | 1514–1515 | pfSense |
+| Tout le reste | `192.168.50.2` | — | Refusé par pfSense, puis par `DOCKER-USER` |
+
+La DMZ ne joint ni le portail, ni le contrôleur de domaine, et utilise un DNS public. Le
+VLAN 50 n'a pas d'accès à Internet.
 
 ## Mesures de sécurité
 
@@ -43,8 +64,8 @@ Accès depuis le réseau du lab, par redirection sur la VM GNS3 :
 | CSRF | Jeton vérifié sur chaque formulaire |
 | Écoute réseau | TLS obligatoire, HTTP redirigé, HSTS |
 | Divulgation | `server_tokens off`, en-têtes de sécurité portés par nginx seul |
-| Secrets dans le code | Tout dans `.env`, exclu du dépôt, démarrage refusé si une variable manque |
-| Accès direct à la base | `pg_hba.conf` par rôle et par adresse, plus filtrage `DOCKER-USER` sur le port 5432 |
+| Secrets dans le code | Tout dans `.env` (droits `600`), exclu du dépôt, démarrage refusé si une variable manque |
+| Accès direct à la base | pfSense, puis `DOCKER-USER` sur le port 5432, puis `pg_hba.conf` par rôle et par adresse |
 
 ### Portail du personnel
 
@@ -56,66 +77,83 @@ demande enregistre son auteur et son horodatage.
 ### Site public
 
 Rôle PostgreSQL en écriture seule sur une seule table : aucune lecture possible, sur
-aucune table. Champ piège invisible contre les robots et limitation à deux envois par
-minute et par adresse. Corps de requête plafonné à 32 ko, date bornée à 90 jours,
-longueurs contraintes. `Content-Security-Policy` sans aucun script autorisé. Référence de
-demande tirée au hasard et non séquentielle, pour empêcher toute énumération.
+aucune table. Corps de requête plafonné à 32 ko, date bornée à 90 jours, longueurs
+contraintes. `Content-Security-Policy` sans aucun script autorisé. Référence de demande
+tirée au hasard et non séquentielle, pour empêcher toute énumération.
+
+Protection contre les dépôts massifs, en trois couches :
+
+1. **Champ piège** invisible : un robot qui le remplit reçoit une fausse confirmation.
+2. **nginx** limite les envois (`POST`) à deux par minute et par adresse, avec une petite
+   réserve, et à trente par minute au total. L'affichage du formulaire n'est jamais limité.
+3. **Trigger PostgreSQL** : au plus trois demandes en attente par numéro de téléphone, et
+   cinq cents au total. Le refus est distingué d'une panne : le patient voit un message
+   explicite (HTTP 429), et le journal enregistre un événement `booking_refused_flood`.
 
 **Aucun compte patient** : le formulaire est anonyme et le cabinet rappelle. Il n'y a donc
 ni base de mots de passe patients à protéger, ni réinitialisation à sécuriser, ni
 énumération de comptes possible.
 
 **Aucune donnée médicale collectée** : nom, contact, date et demi-journée souhaitées, et un
-champ de précisions pratiques plafonné avec avertissement. Le formulaire public reste
-hors du périmètre des données de santé.
+champ de précisions pratiques plafonné avec avertissement. Les demandes de plus de six
+mois sont purgées chaque nuit, conformément à la durée annoncée aux patients.
 
 ## Déploiement
 
 Les trois machines sont des nœuds Debian 12 de la topologie GNS3. Le script
-`db-vm/provision-debian.sh` prépare une machine neuve — nom d'hôte, adresse statique,
-DNS, neutralisation de cloud-init, Docker. Son en-tête documente les étapes préalables.
+`db-vm/provision-debian.sh` prépare une machine neuve : nom d'hôte, clés SSH d'hôte
+régénérées, adresse fixe liée à la MAC, DNS, neutralisation de cloud-init, Docker. Son
+en-tête documente les étapes préalables, dont l'ouverture temporaire de l'accès Internet
+du VLAN dans pfSense.
 
-Deux précautions apprises à nos dépens : vérifier `hostname` avant toute commande
-privilégiée, et poser `preserve_hostname: true` dans `/etc/cloud/cloud.cfg.d/`, faute de
-quoi cloud-init réécrit le nom de la machine au redémarrage suivant.
+Précaution apprise à nos dépens : vérifier `hostname` avant toute commande privilégiée.
 
-### 1. Base de données — 192.168.122.51
+### 1. Base de données — db-medical
 
 ```bash
 cd db-vm
-cp .env.example .env          # les quatre valeurs, APP_ALLOWED_CIDR, BOOKING_DB_PASSWORD
+cp .env.example .env && chmod 600 .env   # mots de passe, adresses autorisées
 docker compose up -d
 ./002-appointments.sh         # table des demandes et rôle booking_user
-./protect-db.sh               # port 5432 réservé aux deux machines applicatives
+./003-anti-flood.sh           # trigger anti-flood
+sudo cp protect-db.service purge-demandes.service purge-demandes.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now protect-db.service purge-demandes.timer
 ```
 
 Le script d'initialisation ne s'exécute qu'au premier démarrage du conteneur : le `.env`
-doit être définitif avant le premier `up`.
+doit être définitif avant le premier `up`. Les chemins des services supposent le dépôt
+copié dans `/home/debian/medical-office-db`.
 
-### 2. Portail du personnel — 192.168.122.50
+### 2. Portail du personnel — web-medical
 
 ```bash
-cp .env.example .env          # mêmes identifiants de base, DB_HOST=192.168.122.51
+cp .env.example .env && chmod 600 .env   # DB_HOST=192.168.50.2
 ./nginx/generate-cert.sh
 docker compose build && docker compose up -d
 docker compose exec app python seed.py
 ```
 
-### 3. Site public — 192.168.122.52
+### 3. Site public — dmz-rdv
 
 ```bash
 cd booking-vm
-cp .env.example .env          # DB_PASSWORD = BOOKING_DB_PASSWORD de la VM base
+cp .env.example .env && chmod 600 .env   # DB_PASSWORD = BOOKING_DB_PASSWORD de la base
 ./nginx/generate-cert.sh
 docker compose build && docker compose up -d
 ```
 
-### 4. Publication sur le réseau du lab
+### 4. Publication sur le réseau du lab — VM GNS3
 
-Le script `gns3/publish-portal.sh` pose les deux redirections, 8443 vers le portail et
-8444 vers le site public, sans masquage : les adresses sources réelles restent visibles
-dans les journaux, ce qui est nécessaire à la limitation par adresse et à l'analyse des
-accès.
+```bash
+cp gns3/publish-portal.sh ~/ && chmod +x ~/publish-portal.sh
+sudo cp gns3/publish-portal.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now publish-portal.service
+```
+
+Le port 8444 de la VM GNS3 est redirigé vers le WAN de pfSense, qui redirige à son tour
+vers la DMZ. Sur le WAN de pfSense, le blocage des réseaux privés doit être désactivé :
+tout le lab arrive avec des adresses privées.
 
 ## Exploitation
 
@@ -124,25 +162,32 @@ docker compose down     # jamais -v : le volume contient les données
 docker compose up -d
 ```
 
-Les conteneurs redémarrent seuls avec leur machine. Les règles iptables, non : rejouer
-`db-vm/protect-db.sh` sur la base et `gns3/publish-portal.sh` sur la VM GNS3 après chaque
-redémarrage.
+Tout redémarre seul avec les machines : conteneurs, filtrage `DOCKER-USER`
+(`protect-db.service`), purge nocturne (`purge-demandes.timer`) et publication
+(`publish-portal.service`).
 
-Sauvegarde :
+L'administration se fait par les consoles GNS3. Avant de fermer une console, toujours
+taper `exit` jusqu'à revoir `login:` : les consoles restent dans l'état où on les laisse,
+et sont joignables par tout le lab.
+
+Sauvegarde, sur `db-medical` :
 
 ```bash
-docker compose exec -T db pg_dump -U postgres_admin medical_office > dump-$(date +%F).sql
+docker compose exec -T db pg_dump -U postgres_admin medical_office | gzip > ~/backups/medical_office-$(date +%F).sql.gz
 ```
+
+Les trois machines remontent leurs journaux à Wazuh (`WAZUH01`, `192.168.30.20`).
 
 ## Vérifications
 
-Le parcours complet : déposer une demande sur `:8444`, noter la référence, la retrouver
-sur `:8443/rendez-vous` et la confirmer.
+Le parcours complet : déposer une demande sur `https://192.168.183.147:8444/`, noter la
+référence, la retrouver depuis un poste du personnel sur `https://192.168.50.3/rendez-vous`
+et la confirmer.
 
-Le cloisonnement, depuis la VM DMZ — la vérification la plus parlante du projet :
+Le cloisonnement, depuis `dmz-rdv`, la vérification la plus parlante du projet :
 
 ```bash
-docker compose exec app python -c "
+docker compose exec -T app python - <<'PY'
 import os, psycopg2
 c = psycopg2.connect(host=os.environ['DB_HOST'], dbname=os.environ['DB_NAME'],
                      user=os.environ['DB_USER'], password=os.environ['DB_PASSWORD'])
@@ -150,35 +195,44 @@ cur = c.cursor()
 for table in ('patients', 'staff', 'appointments'):
     try:
         cur.execute(f'SELECT count(*) FROM {table}')
-        print(table, '-> lecture AUTORISEE :', cur.fetchone()[0])
+        print(table, '-> LECTURE AUTORISEE')
     except Exception as e:
         print(table, '-> refuse :', str(e).strip().splitlines()[0])
     c.rollback()
-"
+PY
 ```
 
-Les trois tables doivent être refusées. Le filtrage réseau se vérifie de la même façon
-depuis une machine tierce : `nc -vz 192.168.122.51 5432` depuis la VM GNS3 ne doit pas
-aboutir.
+Les trois tables doivent être refusées. Le filtrage se vérifie depuis une machine tierce :
+`Test-NetConnection 192.168.50.2 -Port 5432` doit échouer, et les compteurs de
+`sudo iptables -L DOCKER-USER -n -v` sur la base montrent qui a été accepté ou rejeté.
 
 ## Limites connues
 
 Assumées et documentées plutôt que masquées.
 
-Les certificats TLS sont auto-signés. La liaison entre les applications et la base n'est
-pas chiffrée : acceptable sur un segment contrôlé, à corriger en contexte réel de données
-de santé. L'authentification du personnel est locale et sans second facteur, en attendant
-une délégation à l'annuaire. La limitation de débit freine le bruteforce mais ne verrouille
-pas les comptes. Les secrets vivent dans des fichiers `.env` sur disque et non dans un
-coffre. La purge des demandes de plus de six mois, annoncée aux patients, n'est pas encore
-automatisée. Le champ de précisions du formulaire public est libre : seul un avertissement
-dissuade d'y écrire une information médicale, là où une liste de choix l'interdirait. Enfin
-les journaux, bien qu'écrits sur la sortie standard et prêts à être collectés, ne sont pas
-encore repris par la brique monitoring.
+**Liées à l'environnement du lab.** Tous les étudiants sortent par la même adresse,
+`192.168.128.50`. Les limites de débit par adresse deviennent donc globales, et les
+journaux ne permettent pas d'attribuer une requête à quelqu'un. Ni pfSense ni la VM GNS3
+ne masquent l'adresse source : en déploiement réel, nginx verrait l'adresse de chaque
+patient. Les consoles GNS3 sont joignables par tout le lab ; seul le mot de passe des
+comptes les protège.
 
-L'image Debian du template GNS3 embarque par ailleurs des clés d'hôte SSH pré-générées,
-identiques sur toute machine qui en dérive. Le script de provisionnement les régénère, ce
-qui referme une possibilité d'usurpation entre machines du lab.
+**Liées à l'architecture.** `web-medical` et `db-medical` partagent le VLAN 50 : leur flux
+ne traverse pas pfSense, et seul le filtrage local de la base le contrôle. La DMZ est un
+VLAN derrière le switch principal, et non une interface dédiée de pfSense. Le flux de la
+DMZ vers la base est une exception assumée, réduite à une adresse, un port, un rôle, une
+table et un seul verbe SQL. Celui de la DMZ vers Wazuh en est une seconde, limitée aux
+ports de l'agent.
+
+**Liées à la conception.** Les certificats TLS sont auto-signés. La liaison entre les
+applications et la base n'est pas chiffrée. L'authentification du personnel est locale et
+sans second facteur. La limitation de débit freine le bruteforce mais ne verrouille pas
+les comptes. Les secrets vivent dans des fichiers `.env` sur disque et non dans un coffre.
+La ligne `local … trust` de `pg_hba.conf` laisse tout compte de la machine base se
+connecter sans mot de passe depuis le conteneur. Le plafond global de cinq cents demandes
+en attente peut être atteint volontairement, ce qui bloque les vrais patients jusqu'au
+traitement des demandes. Le champ de précisions du formulaire public est libre : seul un
+avertissement dissuade d'y écrire une information médicale.
 
 ## Arborescence
 
@@ -186,18 +240,26 @@ qui referme une possibilité d'usurpation entre machines du lab.
 .
 ├── app/                    Portail du personnel (Flask, templates, seed)
 ├── nginx/                  Reverse proxy du portail
+├── docker-compose.yml      Pile du portail
+├── .env.example
 ├── booking-vm/             Site public de prise de rendez-vous, machine DMZ
 │   ├── app/
 │   ├── nginx/
 │   └── docker-compose.yml
 ├── db-vm/                  Machine base de données
 │   ├── docker-compose.yml
-│   ├── 001-init.sh         Schéma, rôle app_user, restriction pg_hba
-│   ├── 002-appointments.sh Table des demandes, rôle booking_user
-│   ├── protect-db.sh       Filtrage du port 5432
-│   └── provision-debian.sh Préparation d'une machine neuve
-├── docker-compose.yml      Pile du portail
-└── .env.example
+│   ├── 001-init.sh             Schéma, rôle app_user, restriction pg_hba
+│   ├── 002-appointments.sh     Table des demandes, rôle booking_user
+│   ├── 003-anti-flood.sh       Trigger anti-flood
+│   ├── protect-db.sh           Filtrage du port 5432
+│   ├── protect-db.service      Filtrage rejoué au démarrage
+│   ├── purge-demandes.sh       Purge des demandes de plus de six mois
+│   ├── purge-demandes.service
+│   ├── purge-demandes.timer    Chaque nuit à 3 h
+│   └── provision-debian.sh     Préparation d'une machine neuve
+└── gns3/                   VM GNS3
+    ├── publish-portal.sh       Redirection 8444 vers le WAN de pfSense
+    └── publish-portal.service
 ```
 
-Les fichiers `.env`, certificats, clés et dumps ne sont jamais versionnés.
+Les fichiers `.env`, certificats, clés et sauvegardes ne sont jamais versionnés.
