@@ -41,6 +41,24 @@ DB_CONFIG = dict(
 HORIZON_JOURS = 90
 
 
+class DemandeRefusee(Exception):
+    """Refus du trigger anti-flood de la base : ce n'est pas une panne."""
+
+    def __init__(self, motif):
+        super().__init__(motif)
+        self.motif = motif
+
+
+MESSAGES_REFUS = {
+    "trop de demandes en attente pour ce numero":
+        "Vous avez déjà des demandes en attente. Le secrétariat vous rappellera "
+        "pour les traiter : inutile d'en déposer une nouvelle.",
+    "file de demandes saturee":
+        "Le cabinet reçoit actuellement beaucoup de demandes. Merci de réessayer "
+        "plus tard ou de contacter le cabinet par téléphone.",
+}
+
+
 class DemandeForm(FlaskForm):
     last_name = StringField("Nom", validators=[DataRequired(), Length(min=2, max=100)])
     first_name = StringField("Prénom", validators=[DataRequired(), Length(min=2, max=100)])
@@ -90,6 +108,9 @@ def enregistrer(form):
                 )
             conn.commit()
             return reference
+        except psycopg2.errors.RaiseException as e:
+            conn.rollback()
+            raise DemandeRefusee((e.diag.message_primary or "").strip())
         except psycopg2.errors.UniqueViolation:
             conn.rollback()
             continue
@@ -108,6 +129,12 @@ def demande():
             return render_template("confirmation.html", reference="—")
         try:
             reference = enregistrer(form)
+        except DemandeRefusee as refus:
+            logger.warning("booking_refused_flood motif=%s ip=%s",
+                           refus.motif, request.remote_addr)
+            message = MESSAGES_REFUS.get(refus.motif,
+                                         MESSAGES_REFUS["file de demandes saturee"])
+            return render_template("form.html", form=form, erreur=message), 429
         except Exception:
             logger.exception("booking_failed ip=%s", request.remote_addr)
             return render_template("form.html", form=form,
