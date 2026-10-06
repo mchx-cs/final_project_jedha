@@ -1,0 +1,12 @@
+[Unit]
+Description=Publication du site de rendez-vous (8444 -> WAN pfSense)
+After=network-online.target libvirtd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/gns3/publish-portal.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
