@@ -1,7 +1,8 @@
 #!/bin/bash
 #
 # Provisionne un nœud Debian 12 fraîchement déployé dans GNS3 :
-# nom d'hôte, IP statique persistante, DNS, neutralisation de cloud-init, Docker.
+# nom d'hôte, clés SSH d'hôte, adresse fixe liée à la MAC, DNS,
+# neutralisation de cloud-init, Docker.
 #
 # ---------------------------------------------------------------------------
 # AVANT DE LANCER CE SCRIPT
@@ -10,82 +11,90 @@
 #       find /opt/gns3/projects -name "hda_disk.qcow2"
 #       qemu-img resize <le chemin du bon nœud> +18G
 #
-# 2. Démarrer le nœud et ouvrir sa console (telnet). L'interface est éteinte,
-#    donc il faut la monter à la main le temps de récupérer ce script :
-#       sudo ip link set ens4 up
-#       sudo ip addr add 192.168.122.51/24 dev ens4
-#       sudo ip route add default via 192.168.122.1
+# 2. Faire réserver l'adresse du nœud dans pfSense (DHCP, par adresse MAC),
+#    et ouvrir temporairement l'accès Internet de son VLAN : le script
+#    installe Docker depuis download.docker.com. Refermer cet accès ensuite.
 #
-# 3. Envoyer ce script depuis ton PC :
-#       scp -J gns3@192.168.183.147 provision-debian.sh debian@192.168.122.51:~/
+# 3. Démarrer le nœud, ouvrir sa console GNS3 et récupérer une adresse :
+#       sudo dhclient -v ens4
+#    La sortie indique l'adresse réservée, la passerelle et les DNS.
 #
-# 4. Puis, sur le nœud :
+# 4. Copier ce script sur le nœud (collage dans la console avec
+#    cat > provision-debian.sh <<'SCRIPT' ... SCRIPT), puis :
 #       chmod +x provision-debian.sh
-#       sudo ./provision-debian.sh 192.168.122.51 db-medical
+#       sudo ./provision-debian.sh 192.168.50.2 db-medical 192.168.50.1 192.168.40.2,8.8.8.8
 #
-# L'adresse passée en argument doit être celle que tu viens de configurer
-# temporairement : le script la rend permanente sans couper ta session.
+# Paramètres : adresse, nom d'hôte, passerelle, DNS séparés par des virgules
+# (8.8.8.8 par défaut), interface (ens4 par défaut). Masque : /24.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
 
-IP="${1:?Usage: $0 <ip-sans-masque> <nom-d-hote> [interface]}"
-HOSTNAME_NEW="${2:?Usage: $0 <ip-sans-masque> <nom-d-hote> [interface]}"
-IFACE="${3:-ens4}"
-GATEWAY="192.168.122.1"
+USAGE="Usage: $0 <ip> <nom-d-hote> <passerelle> [dns1,dns2] [interface]"
+IP="${1:?$USAGE}"
+HOSTNAME_NEW="${2:?$USAGE}"
+GATEWAY="${3:?$USAGE}"
+DNS_LIST="${4:-8.8.8.8}"
+IFACE="${5:-ens4}"
+MASK=24
 
 [ "$(id -u)" -eq 0 ] || { echo "À lancer avec sudo." >&2; exit 1; }
+MAC="$(cat "/sys/class/net/${IFACE}/address" 2>/dev/null)" \
+    || { echo "Interface ${IFACE} introuvable." >&2; exit 1; }
 
-echo "== 1/6 Nom d'hôte : ${HOSTNAME_NEW}"
+echo "== 1/7 Nom d'hôte : ${HOSTNAME_NEW}"
 hostnamectl set-hostname "$HOSTNAME_NEW"
 sed -i "s/^127.0.1.1.*/127.0.1.1\t${HOSTNAME_NEW}/" /etc/hosts || true
 
-echo "== 2/6 Clés SSH d'hôte"
-# Utile si la VM a été dupliquée : deux machines ne doivent jamais partager
-# leurs clés d'hôte. Sur une VM neuve, cette étape est simplement sans effet.
+echo "== 2/7 Clés SSH d'hôte"
+# Une VM issue du template GNS3 partage ses clés d'hôte avec toutes les
+# autres : on les régénère pour qu'aucune machine ne puisse en usurper une autre.
 rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A
 systemctl restart ssh
 
-echo "== 3/6 Adresse IP statique : ${IP}/24 sur ${IFACE}"
-cat > "/etc/systemd/network/10-${IFACE}.network" <<EOF
+echo "== 3/7 Neutralisation de cloud-init (réseau et nom d'hôte)"
+echo 'network: {config: disabled}' > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+echo 'preserve_hostname: true'     > /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
+
+echo "== 4/7 Adresse fixe : ${IP}/${MASK} sur ${IFACE} (${MAC}), passerelle ${GATEWAY}"
+# La configuration est liée à la MAC : un clone du nœud, qui aura une autre
+# MAC, ne prendra pas cette adresse.
+cat > "/etc/systemd/network/10-${IFACE}.network" <<CONF
 [Match]
-Name=${IFACE}
+MACAddress=${MAC}
 
 [Network]
-Address=${IP}/24
+Address=${IP}/${MASK}
 Gateway=${GATEWAY}
-DNS=${GATEWAY}
-DNS=8.8.8.8
-EOF
-systemctl enable --now systemd-networkd >/dev/null 2>&1 || true
+CONF
+dhclient -r "$IFACE" 2>/dev/null || true
+pkill dhclient 2>/dev/null || true
+ip addr flush dev "$IFACE"
+systemctl enable systemd-networkd >/dev/null 2>&1 || true
 systemctl restart systemd-networkd
+sleep 3
 
-echo "== 4/6 Neutralisation de la configuration réseau de cloud-init"
-echo 'network: {config: disabled}' > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
-
-echo "== 5/6 Résolution DNS"
-# Le lien symbolique d'origine pointe vers /run, vidé à chaque démarrage :
+echo "== 5/7 Résolution DNS : ${DNS_LIST}"
+# Le lien d'origine pointe vers /run, vidé à chaque démarrage :
 # on le remplace par un vrai fichier.
 rm -f /etc/resolv.conf
-printf 'nameserver %s\nnameserver 8.8.8.8\n' "$GATEWAY" > /etc/resolv.conf
+for dns in ${DNS_LIST//,/ }; do
+    echo "nameserver ${dns}"
+done > /etc/resolv.conf
 
-echo "   Attente de la connectivité..."
-for _ in $(seq 1 20); do
-    ping -c1 -W1 deb.debian.org >/dev/null 2>&1 && break
-    sleep 2
-done
-ping -c1 -W2 deb.debian.org >/dev/null 2>&1 || {
-    echo "Pas de connectivité vers Internet. Vérifie le lien vers le NAT dans GNS3." >&2
+echo "== 6/7 Accès aux dépôts de paquets"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq || {
+    echo "Dépôts injoignables : l'accès Internet du VLAN est-il ouvert dans pfSense ?" >&2
     exit 1
 }
 
-echo "== 6/6 Docker (dépôt officiel)"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg unzip
+echo "== 7/7 Docker (dépôt officiel)"
+apt-get install -y -qq ca-certificates curl gnupg
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+curl -fsSL https://download.docker.com/linux/debian/gpg \
+    | gpg --yes --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
     > /etc/apt/sources.list.d/docker.list
@@ -93,19 +102,17 @@ apt-get update -qq
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 usermod -aG docker debian
 
-cat <<EOF
+cat <<FIN
 
 -------------------------------------------------------------------
-Terminé. Hôte ${HOSTNAME_NEW}, adresse ${IP}/24 sur ${IFACE}.
+Terminé. Hôte ${HOSTNAME_NEW}, adresse ${IP}/${MASK} sur ${IFACE}.
 
-Reconnecte-toi (pour que le groupe docker prenne effet), puis vérifie :
+Déconnecte-toi puis reconnecte-toi (pour que le groupe docker prenne
+effet), puis vérifie :
 
-    ip -br a
+    ip -br a; ip route; cat /etc/resolv.conf
     docker run --rm hello-world
 
-Les clés SSH d'hôte ayant changé, ton client refusera peut-être la
-connexion. Dans ce cas, sur ton PC :
-
-    ssh-keygen -R ${IP}
+Pense à faire refermer l'accès Internet du VLAN dans pfSense.
 -------------------------------------------------------------------
-EOF
+FIN
