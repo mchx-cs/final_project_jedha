@@ -14,7 +14,7 @@ services:
     ports:
       # Écoute UNIQUEMENT sur l'IP de cette VM, jamais sur 0.0.0.0.
       # Si tu changes l'IP de la VM BDD, change-la ici aussi.
-      - "192.168.122.51:5432:5432"
+      - "192.168.50.2:5432:5432"
 
 volumes:
   db_data:

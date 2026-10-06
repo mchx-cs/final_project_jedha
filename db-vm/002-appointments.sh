@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# À lancer SUR LA VM BASE (192.168.122.51), depuis ~/medical-office-db.
+# À lancer SUR LA VM BASE (192.168.50.2), depuis ~/medical-office-db.
 #
 # Crée la table des demandes de rendez-vous, le rôle applicatif public
 # `booking_user` — qui ne peut QU'INSÉRER dans cette table, rien lire — et
@@ -8,14 +8,14 @@
 #
 # Avant de lancer, ajoute deux lignes dans le .env de cette VM :
 #   BOOKING_DB_PASSWORD=<mot de passe fort généré avec openssl rand -base64 24>
-#   BOOKING_ALLOWED_CIDR=192.168.122.52/32
+#   BOOKING_ALLOWED_CIDR=192.168.60.2/32
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
 set -a; . ./.env; set +a
 : "${BOOKING_DB_PASSWORD:?Ajoute BOOKING_DB_PASSWORD=... dans .env}"
-: "${BOOKING_ALLOWED_CIDR:?Ajoute BOOKING_ALLOWED_CIDR=192.168.122.52/32 dans .env}"
+: "${BOOKING_ALLOWED_CIDR:?Ajoute BOOKING_ALLOWED_CIDR=192.168.60.2/32 dans .env}"
 
 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "$DB_SUPERUSER" -d "$DB_NAME" <<EOSQL
 CREATE TABLE IF NOT EXISTS appointments (

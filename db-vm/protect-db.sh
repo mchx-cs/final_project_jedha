@@ -6,8 +6,8 @@
 #
 set -euo pipefail
 
-WEB="192.168.122.50"
-DMZ="192.168.122.52"
+WEB="192.168.50.3"
+DMZ="192.168.60.2"
 IFACE="ens4"
 
 add_rule() {   # insère en tête, sans doublon
