@@ -11,6 +11,8 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./001-init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
+    security_opt:
+      - no-new-privileges:true
     ports:
       # Écoute UNIQUEMENT sur l'IP de cette VM, jamais sur 0.0.0.0.
       # Si tu changes l'IP de la VM BDD, change-la ici aussi.

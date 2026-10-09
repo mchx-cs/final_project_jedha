@@ -1,5 +1,4 @@
-# Nouveau docker-compose.yml de la VM WEB, une fois la base déportée.
-# Remplace l'ancien fichier par celui-ci (garde le même nom : docker-compose.yml).
+# Pile du portail du personnel (VM web-medical). La base est sur db-medical.
 services:
   app:
     build: ./app
@@ -15,9 +14,19 @@ services:
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
       SEED_SECRETARY_USER: ${SEED_SECRETARY_USER}
       SEED_SECRETARY_PASSWORD: ${SEED_SECRETARY_PASSWORD}
+    # Durcissement : code en lecture seule, aucun pouvoir root, aucun gain
+    # de privilèges possible. /tmp en mémoire pour les fichiers de travail
+    # de Gunicorn.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - frontend
-    # Toujours aucun port publié : nginx reste le seul point d'entrée.
+    # Aucun port publié : nginx reste le seul point d'entrée.
 
   nginx:
     image: nginx:1.27-alpine
@@ -28,6 +37,8 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - app
     networks:

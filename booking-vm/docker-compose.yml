@@ -9,6 +9,16 @@ services:
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+    # Durcissement : code en lecture seule, aucun pouvoir root, aucun gain
+    # de privilèges possible. /tmp en mémoire pour les fichiers de travail
+    # de Gunicorn.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - frontend
     # Aucun port publié : nginx est le seul point d'entrée.
@@ -22,6 +32,8 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - app
     networks:
