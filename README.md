@@ -66,11 +66,16 @@ VLAN 50 n'a pas d'accès à Internet.
 | Divulgation | `server_tokens off`, en-têtes de sécurité portés par nginx seul |
 | Secrets dans le code | Tout dans `.env` (droits `600`), exclu du dépôt, démarrage refusé si une variable manque |
 | Accès direct à la base | pfSense, puis `DOCKER-USER` sur le port 5432, puis `pg_hba.conf` par rôle et par adresse |
+| Élévation de privilèges dans un conteneur | `no-new-privileges` partout ; applications Flask sous un utilisateur dédié, en lecture seule, sans aucune capacité root |
 
 ### Portail du personnel
 
 Mots de passe hachés en bcrypt coût 12. Cookies `Secure`, `HttpOnly`, `SameSite=Lax`.
-Limitation à cinq tentatives de connexion par minute et par adresse. Rôles `medecin` et
+Deux limites contre le bruteforce : cinq tentatives par minute et par adresse (nginx), et un
+délai croissant par identifiant (application) : quatre échecs libres, puis 15 s, 30 s,
+jusqu'à 15 minutes, sans verrouillage définitif. Un mot de passe est toujours vérifié, même
+pour un identifiant inexistant, pour que le temps de réponse ne révèle pas quels comptes
+existent. Rôles `medecin` et
 `secretaire`, la suppression d'un dossier étant réservée au médecin. Chaque traitement de
 demande enregistre son auteur et son horodatage.
 
@@ -98,6 +103,16 @@ ni base de mots de passe patients à protéger, ni réinitialisation à sécuris
 champ de précisions pratiques plafonné avec avertissement. Les demandes de plus de six
 mois sont purgées chaque nuit, conformément à la durée annoncée aux patients.
 
+### Machines
+
+SSH : connexion de `root` interdite, X11 coupé, trois essais par connexion, trente secondes
+pour s'authentifier. Le compte `gns3` hérité du modèle de VM est verrouillé. `sudo` redemande
+le mot de passe de `debian`, qui ne fait pas partie du groupe `docker` : ce groupe donnerait
+un accès root sans mot de passe. Toutes les commandes Docker passent donc par `sudo`.
+
+Les journaux des deux applications indiquent la vraie adresse du client, transmise par nginx
+(`ProxyFix`, qui ne fait confiance qu'à la dernière adresse de `X-Forwarded-For`).
+
 ## Déploiement
 
 Les trois machines sont des nœuds Debian 12 de la topologie GNS3. Le script
@@ -113,9 +128,10 @@ Précaution apprise à nos dépens : vérifier `hostname` avant toute commande p
 ```bash
 cd db-vm
 cp .env.example .env && chmod 600 .env   # mots de passe, adresses autorisées
-docker compose up -d
-./002-appointments.sh         # table des demandes et rôle booking_user
-./003-anti-flood.sh           # trigger anti-flood
+sudo docker compose up -d
+sudo ./002-appointments.sh    # table des demandes et rôle booking_user
+sudo ./003-anti-flood.sh      # trigger anti-flood
+sudo ./004-login-attempts.sh  # délai croissant du portail
 sudo cp protect-db.service purge-demandes.service purge-demandes.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now protect-db.service purge-demandes.timer
@@ -130,8 +146,8 @@ copié dans `/home/debian/medical-office-db`.
 ```bash
 cp .env.example .env && chmod 600 .env   # DB_HOST=192.168.50.2
 ./nginx/generate-cert.sh
-docker compose build && docker compose up -d
-docker compose exec app python seed.py
+sudo docker compose build && sudo docker compose up -d
+sudo docker compose exec app python seed.py
 ```
 
 ### 3. Site public — dmz-rdv
@@ -140,7 +156,7 @@ docker compose exec app python seed.py
 cd booking-vm
 cp .env.example .env && chmod 600 .env   # DB_PASSWORD = BOOKING_DB_PASSWORD de la base
 ./nginx/generate-cert.sh
-docker compose build && docker compose up -d
+sudo docker compose build && sudo docker compose up -d
 ```
 
 ### 4. Publication sur le réseau du lab — VM GNS3
@@ -158,8 +174,8 @@ tout le lab arrive avec des adresses privées.
 ## Exploitation
 
 ```bash
-docker compose down     # jamais -v : le volume contient les données
-docker compose up -d
+sudo docker compose down     # jamais -v : le volume contient les données
+sudo docker compose up -d
 ```
 
 Tout redémarre seul avec les machines : conteneurs, filtrage `DOCKER-USER`
@@ -173,7 +189,7 @@ et sont joignables par tout le lab.
 Sauvegarde, sur `db-medical` :
 
 ```bash
-docker compose exec -T db pg_dump -U postgres_admin medical_office | gzip > ~/backups/medical_office-$(date +%F).sql.gz
+sudo docker compose exec -T db pg_dump -U postgres_admin medical_office | gzip > ~/backups/medical_office-$(date +%F).sql.gz
 ```
 
 Les trois machines remontent leurs journaux à Wazuh (`WAZUH01`, `192.168.30.20`).
@@ -187,7 +203,7 @@ et la confirmer.
 Le cloisonnement, depuis `dmz-rdv`, la vérification la plus parlante du projet :
 
 ```bash
-docker compose exec -T app python - <<'PY'
+sudo docker compose exec -T app python - <<'PY'
 import os, psycopg2
 c = psycopg2.connect(host=os.environ['DB_HOST'], dbname=os.environ['DB_NAME'],
                      user=os.environ['DB_USER'], password=os.environ['DB_PASSWORD'])
@@ -226,13 +242,16 @@ ports de l'agent.
 
 **Liées à la conception.** Les certificats TLS sont auto-signés. La liaison entre les
 applications et la base n'est pas chiffrée. L'authentification du personnel est locale et
-sans second facteur. La limitation de débit freine le bruteforce mais ne verrouille pas
-les comptes. Les secrets vivent dans des fichiers `.env` sur disque et non dans un coffre.
+sans second facteur. Le délai croissant ne verrouille jamais un compte : un
+attaquant qui échoue régulièrement peut le maintenir sous délai, ce que l'événement
+`auth_throttled` permet de repérer dans Wazuh. Les secrets vivent dans des fichiers `.env` sur disque et non dans un coffre.
 La ligne `local … trust` de `pg_hba.conf` laisse tout compte de la machine base se
 connecter sans mot de passe depuis le conteneur. Le plafond global de cinq cents demandes
 en attente peut être atteint volontairement, ce qui bloque les vrais patients jusqu'au
 traitement des demandes. Le champ de précisions du formulaire public est libre : seul un
-avertissement dissuade d'y écrire une information médicale.
+avertissement dissuade d'y écrire une information médicale. L'administration SSH se fait
+encore par mot de passe. SSH et nginx écoutent aussi en IPv6, limité au VLAN, que le
+filtrage `DOCKER-USER` (IPv4) ne couvre pas.
 
 ## Arborescence
 
@@ -251,6 +270,7 @@ avertissement dissuade d'y écrire une information médicale.
 │   ├── 001-init.sh             Schéma, rôle app_user, restriction pg_hba
 │   ├── 002-appointments.sh     Table des demandes, rôle booking_user
 │   ├── 003-anti-flood.sh       Trigger anti-flood
+│   ├── 004-login-attempts.sh   Table du délai croissant du portail
 │   ├── protect-db.sh           Filtrage du port 5432
 │   ├── protect-db.service      Filtrage rejoué au démarrage
 │   ├── purge-demandes.sh       Purge des demandes de plus de six mois

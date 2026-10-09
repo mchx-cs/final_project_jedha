@@ -2,7 +2,7 @@
 #
 # Provisionne un nœud Debian 12 fraîchement déployé dans GNS3 :
 # nom d'hôte, clés SSH d'hôte, adresse fixe liée à la MAC, DNS,
-# neutralisation de cloud-init, Docker.
+# neutralisation de cloud-init, Docker, durcissement de SSH et des comptes.
 #
 # ---------------------------------------------------------------------------
 # AVANT DE LANCER CE SCRIPT
@@ -42,22 +42,22 @@ MASK=24
 MAC="$(cat "/sys/class/net/${IFACE}/address" 2>/dev/null)" \
     || { echo "Interface ${IFACE} introuvable." >&2; exit 1; }
 
-echo "== 1/7 Nom d'hôte : ${HOSTNAME_NEW}"
+echo "== 1/8 Nom d'hôte : ${HOSTNAME_NEW}"
 hostnamectl set-hostname "$HOSTNAME_NEW"
 sed -i "s/^127.0.1.1.*/127.0.1.1\t${HOSTNAME_NEW}/" /etc/hosts || true
 
-echo "== 2/7 Clés SSH d'hôte"
+echo "== 2/8 Clés SSH d'hôte"
 # Une VM issue du template GNS3 partage ses clés d'hôte avec toutes les
 # autres : on les régénère pour qu'aucune machine ne puisse en usurper une autre.
 rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A
 systemctl restart ssh
 
-echo "== 3/7 Neutralisation de cloud-init (réseau et nom d'hôte)"
+echo "== 3/8 Neutralisation de cloud-init (réseau et nom d'hôte)"
 echo 'network: {config: disabled}' > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
 echo 'preserve_hostname: true'     > /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
 
-echo "== 4/7 Adresse fixe : ${IP}/${MASK} sur ${IFACE} (${MAC}), passerelle ${GATEWAY}"
+echo "== 4/8 Adresse fixe : ${IP}/${MASK} sur ${IFACE} (${MAC}), passerelle ${GATEWAY}"
 # La configuration est liée à la MAC : un clone du nœud, qui aura une autre
 # MAC, ne prendra pas cette adresse.
 cat > "/etc/systemd/network/10-${IFACE}.network" <<CONF
@@ -75,7 +75,7 @@ systemctl enable systemd-networkd >/dev/null 2>&1 || true
 systemctl restart systemd-networkd
 sleep 3
 
-echo "== 5/7 Résolution DNS : ${DNS_LIST}"
+echo "== 5/8 Résolution DNS : ${DNS_LIST}"
 # Le lien d'origine pointe vers /run, vidé à chaque démarrage :
 # on le remplace par un vrai fichier.
 rm -f /etc/resolv.conf
@@ -83,14 +83,14 @@ for dns in ${DNS_LIST//,/ }; do
     echo "nameserver ${dns}"
 done > /etc/resolv.conf
 
-echo "== 6/7 Accès aux dépôts de paquets"
+echo "== 6/8 Accès aux dépôts de paquets"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || {
     echo "Dépôts injoignables : l'accès Internet du VLAN est-il ouvert dans pfSense ?" >&2
     exit 1
 }
 
-echo "== 7/7 Docker (dépôt officiel)"
+echo "== 7/8 Docker (dépôt officiel)"
 apt-get install -y -qq ca-certificates curl gnupg
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg \
@@ -100,18 +100,43 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
     > /etc/apt/sources.list.d/docker.list
 apt-get update -qq
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-usermod -aG docker debian
+
+echo "== 8/8 Durcissement de SSH et des comptes"
+cat > /etc/ssh/sshd_config.d/10-durcissement.conf <<CONF
+# Durcissement SSH du projet Medical Office
+PermitRootLogin no
+X11Forwarding no
+MaxAuthTries 3
+LoginGraceTime 30
+CONF
+sshd -t && systemctl reload ssh
+# Compte hérité du modèle de VM GNS3, avec un mot de passe connu
+if id gns3 >/dev/null 2>&1; then
+    usermod -L -s /usr/sbin/nologin gns3
+fi
+# debian n'est volontairement pas ajouté au groupe docker, qui donnerait un
+# accès root sans mot de passe. sudo doit aussi redemander le mot de passe :
+# on ne retire le NOPASSWD de cloud-init que si debian a un mot de passe et
+# appartient au groupe sudo, sinon plus personne ne pourrait devenir root.
+if passwd -S debian | grep -q ' P ' && id -nG debian | grep -qw sudo; then
+    rm -f /etc/sudoers.d/90-cloud-init-users
+    visudo -c >/dev/null
+else
+    echo "   ATTENTION : NOPASSWD conservé (debian sans mot de passe ou hors du groupe sudo)."
+fi
 
 cat <<FIN
 
 -------------------------------------------------------------------
 Terminé. Hôte ${HOSTNAME_NEW}, adresse ${IP}/${MASK} sur ${IFACE}.
 
-Déconnecte-toi puis reconnecte-toi (pour que le groupe docker prenne
-effet), puis vérifie :
+Vérifie :
 
     ip -br a; ip route; cat /etc/resolv.conf
-    docker run --rm hello-world
+    sudo docker run --rm hello-world
+
+Toutes les commandes Docker passent par sudo : debian n'est volontairement
+pas dans le groupe docker.
 
 Pense à faire refermer l'accès Internet du VLAN dans pfSense.
 -------------------------------------------------------------------
