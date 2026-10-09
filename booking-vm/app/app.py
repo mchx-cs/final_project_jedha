@@ -12,6 +12,7 @@ import uuid
 from datetime import date, timedelta
 
 from flask import Flask, render_template, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf import FlaskForm, CSRFProtect
 from wtforms import StringField, SelectField, DateField, TextAreaField
 from wtforms.validators import DataRequired, Length, Optional, Email, Regexp, ValidationError
@@ -21,6 +22,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("booking")
 
 app = Flask(__name__)
+# nginx est le seul à parler à l'application : on fait confiance à l'unique
+# en-tête X-Forwarded-For / X-Forwarded-Proto qu'il ajoute, pour journaliser
+# la vraie adresse du client et savoir que la requête est arrivée en HTTPS.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_HTTPONLY"] = True

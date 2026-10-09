@@ -4,6 +4,7 @@ import logging
 from functools import wraps
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf import FlaskForm, CSRFProtect
 from wtforms import StringField, PasswordField, DateField, TextAreaField
 from wtforms.validators import DataRequired, Length
@@ -17,6 +18,10 @@ logger = logging.getLogger("medical-office")
 # monitoring branchée dessus.
 
 app = Flask(__name__)
+# nginx est le seul à parler à l'application : on fait confiance à l'unique
+# en-tête X-Forwarded-For / X-Forwarded-Proto qu'il ajoute, pour journaliser
+# la vraie adresse du client et savoir que la requête est arrivée en HTTPS.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # Pas de valeur par défaut sur le secret : l'appli refuse de démarrer si .env est mal rempli
 app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
