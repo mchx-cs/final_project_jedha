@@ -1,4 +1,5 @@
 import os
+import math
 import logging
 from functools import wraps
 
@@ -75,6 +76,28 @@ def index():
     return redirect(url_for("dashboard") if "user_id" in session else url_for("login"))
 
 
+# --- Délai croissant après des échecs de connexion ------------------------
+# Compté par identifiant, et non par adresse : dans le lab, tout le monde
+# partage la même. Pas de verrouillage définitif, qui permettrait de bloquer
+# un compte exprès : à partir du 5e échec, chaque échec double l'attente,
+# plafonnée à 15 minutes. Un compteur inactif depuis une heure repart de zéro.
+SEUIL_ECHECS = 5
+DELAI_BASE = 15
+DELAI_MAX = 900
+OUBLI_APRES = "1 hour"
+
+# Hachage factice : un mot de passe est toujours vérifié, même pour un
+# identifiant inexistant, pour que le temps de réponse ne révèle pas quels
+# comptes existent.
+HACHAGE_FACTICE = bcrypt.hashpw(b"factice", bcrypt.gensalt(12))
+
+
+def delai_requis(echecs):
+    if echecs < SEUIL_ECHECS:
+        return 0
+    return min(DELAI_BASE * 2 ** (echecs - SEUIL_ECHECS), DELAI_MAX)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     form = LoginForm()
@@ -85,23 +108,54 @@ def login():
         conn = get_db()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                # Requête paramétrée (%s) : jamais de f-string ni de concaténation
+                # Requêtes paramétrées (%s) : jamais de f-string ni de concaténation
                 # avec l'entrée utilisateur -> protection contre l'injection SQL.
+                cur.execute(
+                    """SELECT failures, EXTRACT(EPOCH FROM now() - last_failure) AS ecoule
+                       FROM login_attempts
+                       WHERE username = %s AND last_failure > now() - %s::interval""",
+                    (username, OUBLI_APRES),
+                )
+                tentative = cur.fetchone()
+                if tentative:
+                    restant = delai_requis(tentative["failures"]) - float(tentative["ecoule"])
+                    if restant > 0:
+                        logger.warning("auth_throttled user=%s ip=%s", username, request.remote_addr)
+                        flash(f"Trop de tentatives. Réessayez dans {math.ceil(restant)} secondes.",
+                              "error")
+                        return render_template("login.html", form=form), 429
+
                 cur.execute(
                     "SELECT id, password_hash, role, full_name FROM staff WHERE username = %s",
                     (username,),
                 )
                 row = cur.fetchone()
+                hachage = row["password_hash"].encode("utf-8") if row else HACHAGE_FACTICE
+
+                if bcrypt.checkpw(password, hachage) and row:
+                    cur.execute("DELETE FROM login_attempts WHERE username = %s", (username,))
+                    conn.commit()
+                    session.clear()
+                    session["user_id"] = row["id"]
+                    session["role"] = row["role"]
+                    session["full_name"] = row["full_name"]
+                    logger.info("auth_success user=%s ip=%s", username, request.remote_addr)
+                    return redirect(url_for("dashboard"))
+
+                cur.execute(
+                    """INSERT INTO login_attempts (username, failures, last_failure)
+                       VALUES (%s, 1, now())
+                       ON CONFLICT (username) DO UPDATE SET
+                           failures = CASE
+                               WHEN login_attempts.last_failure < now() - %s::interval THEN 1
+                               ELSE login_attempts.failures + 1
+                           END,
+                           last_failure = now()""",
+                    (username, OUBLI_APRES),
+                )
+                conn.commit()
         finally:
             conn.close()
-
-        if row and bcrypt.checkpw(password, row["password_hash"].encode("utf-8")):
-            session.clear()
-            session["user_id"] = row["id"]
-            session["role"] = row["role"]
-            session["full_name"] = row["full_name"]
-            logger.info("auth_success user=%s ip=%s", username, request.remote_addr)
-            return redirect(url_for("dashboard"))
 
         # Message générique : on ne dit pas si c'est le login ou le mot de passe qui est faux
         logger.warning("auth_failure user=%s ip=%s", username, request.remote_addr)
