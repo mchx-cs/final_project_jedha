@@ -1,0 +1,8 @@
+[Unit]
+Description=Purge des demandes de rendez-vous de plus de six mois
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/debian/medical-office-db/purge-demandes.sh

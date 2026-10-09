@@ -1,0 +1,12 @@
+[Unit]
+Description=Filtrage du port 5432 (DOCKER-USER)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/debian/medical-office-db/protect-db.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
