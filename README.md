@@ -47,11 +47,13 @@ Accès :
 | VLAN 10 et 20 | `192.168.50.3` | 443 | pfSense |
 | `192.168.60.2` | `192.168.50.2` | 5432 | pfSense, puis `DOCKER-USER` et `pg_hba.conf` |
 | `192.168.50.3` | `192.168.50.2` | 5432 | Même VLAN : `DOCKER-USER` et `pg_hba.conf` seulement |
-| Les trois machines | `WAZUH01` `192.168.30.20` | 1514–1515 | pfSense |
+| Les trois machines | `WAZUH01` `192.168.30.20` | 1514 | pfSense (1515 refermé une fois les agents enregistrés) |
+| VLAN 30 (administration) | Les trois machines | 22 | pfSense |
 | Tout le reste | `192.168.50.2` | — | Refusé par pfSense, puis par `DOCKER-USER` |
 
-La DMZ ne joint ni le portail, ni le contrôleur de domaine, et utilise un DNS public. Le
-VLAN 50 n'a pas d'accès à Internet.
+La DMZ ne joint ni le portail, ni le contrôleur de domaine, ni Internet : seuls la base,
+Wazuh et son DNS public lui sont ouverts. Reconstruire son image demande donc une
+ouverture temporaire. Le VLAN 50 n'a pas d'accès à Internet.
 
 ## Mesures de sécurité
 
@@ -237,8 +239,8 @@ comptes les protège.
 ne traverse pas pfSense, et seul le filtrage local de la base le contrôle. La DMZ est un
 VLAN derrière le switch principal, et non une interface dédiée de pfSense. Le flux de la
 DMZ vers la base est une exception assumée, réduite à une adresse, un port, un rôle, une
-table et un seul verbe SQL. Celui de la DMZ vers Wazuh en est une seconde, limitée aux
-ports de l'agent.
+table et un seul verbe SQL. Celui de la DMZ vers Wazuh en est une seconde, limitée au
+port de l'agent.
 
 **Liées à la conception.** Les certificats TLS sont auto-signés. La liaison entre les
 applications et la base n'est pas chiffrée. L'authentification du personnel est locale et
@@ -249,8 +251,9 @@ La ligne `local … trust` de `pg_hba.conf` laisse tout compte de la machine bas
 connecter sans mot de passe depuis le conteneur. Le plafond global de cinq cents demandes
 en attente peut être atteint volontairement, ce qui bloque les vrais patients jusqu'au
 traitement des demandes. Le champ de précisions du formulaire public est libre : seul un
-avertissement dissuade d'y écrire une information médicale. L'administration SSH se fait
-encore par mot de passe. SSH et nginx écoutent aussi en IPv6, limité au VLAN, que le
+avertissement dissuade d'y écrire une information médicale. L'administration SSH reste
+par mot de passe : le VLAN 30 n'a pas de poste capable de SSH, et l'administration passe
+par les consoles GNS3. SSH et nginx écoutent aussi en IPv6, limité au VLAN, que le
 filtrage `DOCKER-USER` (IPv4) ne couvre pas.
 
 ## Arborescence
