@@ -9,6 +9,10 @@ CREATE INDEX IF NOT EXISTS appointments_phone_pending_idx
 CREATE OR REPLACE FUNCTION appointments_anti_flood() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
+    -- Un seul comptage à la fois : sans ce verrou, deux demandes simultanées
+    -- comptent chacune sans voir l'autre (race condition) et dépassent les
+    -- seuils. Le verrou est libéré à la fin de la transaction qui insère.
+    PERFORM pg_advisory_xact_lock(hashtext('appointments_anti_flood'));
     IF (SELECT count(*) FROM appointments
         WHERE status = 'demande'
           AND regexp_replace(phone, '\D', '', 'g') = regexp_replace(NEW.phone, '\D', '', 'g')) >= 3 THEN
@@ -25,4 +29,4 @@ DROP TRIGGER IF EXISTS appointments_anti_flood ON appointments;
 CREATE TRIGGER appointments_anti_flood BEFORE INSERT ON appointments
     FOR EACH ROW EXECUTE FUNCTION appointments_anti_flood();
 EOSQL
-echo "Trigger anti-flood en place : 3 demandes en attente par numéro, 500 au total."
+echo "Trigger anti-flood en place : 3 demandes en attente par numéro, 500 au total, comptage sérialisé."

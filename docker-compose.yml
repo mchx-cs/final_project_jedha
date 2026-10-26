@@ -10,10 +10,7 @@ services:
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
-      SEED_ADMIN_USER: ${SEED_ADMIN_USER}
-      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
-      SEED_SECRETARY_USER: ${SEED_SECRETARY_USER}
-      SEED_SECRETARY_PASSWORD: ${SEED_SECRETARY_PASSWORD}
+      # Aucun mot de passe du personnel ici : seed.py les demande à l'écran.
     # Durcissement : code en lecture seule, aucun pouvoir root, aucun gain
     # de privilèges possible. /tmp en mémoire pour les fichiers de travail
     # de Gunicorn.

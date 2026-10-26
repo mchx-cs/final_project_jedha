@@ -1,6 +1,7 @@
 import os
 import math
 import logging
+from datetime import timedelta
 from functools import wraps
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort
@@ -28,6 +29,9 @@ app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
 app.config["SESSION_COOKIE_SECURE"] = True     # cookie envoyé uniquement en HTTPS
 app.config["SESSION_COOKIE_HTTPONLY"] = True   # inaccessible en JS (protection XSS partielle)
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # limite le CSRF côté cookie
+# Poste partagé à l'accueil : une session inactive depuis 30 minutes expire.
+# Le délai repart à chaque requête (SESSION_REFRESH_EACH_REQUEST, actif par défaut).
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=30)
 
 csrf = CSRFProtect(app)  # protège tous les formulaires POST (flask-wtf)
 
@@ -141,6 +145,7 @@ def login():
                     cur.execute("DELETE FROM login_attempts WHERE username = %s", (username,))
                     conn.commit()
                     session.clear()
+                    session.permanent = True
                     session["user_id"] = row["id"]
                     session["role"] = row["role"]
                     session["full_name"] = row["full_name"]

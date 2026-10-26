@@ -1,11 +1,14 @@
 """
 Crée les comptes du personnel initiaux.
-Ne fait rien de magique : hash bcrypt côté Python (même lib que l'appli, donc
-pas de souci de compatibilité de format), puis INSERT paramétré.
+
+Les mots de passe ne sont jamais stockés dans .env ni dans l'environnement du
+conteneur : ils sont demandés à l'écran, saisie masquée, uniquement pour les
+comptes qui n'existent pas encore. Un compte existant n'est jamais modifié.
 
 Usage (une fois les conteneurs lancés) :
-    docker compose exec app python seed.py
+    sudo docker compose exec app python seed.py
 """
+import getpass
 import os
 import sys
 
@@ -20,35 +23,49 @@ DB_CONFIG = dict(
     password=os.environ["DB_PASSWORD"],
 )
 
+COMPTES = [
+    ("dr.martin", "medecin", "Dr Martin"),
+    ("secretariat", "secretaire", "Secrétariat"),
+]
+LONGUEUR_MIN = 12
 
-def create_account(username, password, role, full_name):
-    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+def demander_mot_de_passe(username):
+    for _ in range(3):
+        p1 = getpass.getpass(f"Mot de passe de {username} : ")
+        p2 = getpass.getpass("Encore une fois : ")
+        if p1 != p2:
+            print("Les deux saisies diffèrent.")
+        elif len(p1) < LONGUEUR_MIN:
+            print(f"Au moins {LONGUEUR_MIN} caractères.")
+        else:
+            return p1
+    sys.exit(f"Abandon : aucun compte créé pour {username}.")
+
+
+def main():
     conn = psycopg2.connect(**DB_CONFIG)
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO staff (username, password_hash, role, full_name)
-                   VALUES (%s, %s, %s, %s)
-                   ON CONFLICT (username) DO NOTHING""",
-                (username, password_hash, role, full_name),
-            )
-        conn.commit()
+        for username, role, full_name in COMPTES:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM staff WHERE username = %s", (username,))
+                if cur.fetchone():
+                    print(f"Compte '{username}' déjà présent : inchangé.")
+                    continue
+                password = demander_mot_de_passe(username)
+                password_hash = bcrypt.hashpw(password.encode("utf-8"),
+                                              bcrypt.gensalt(rounds=12)).decode("utf-8")
+                cur.execute(
+                    """INSERT INTO staff (username, password_hash, role, full_name)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (username) DO NOTHING""",
+                    (username, password_hash, role, full_name),
+                )
+            conn.commit()
+            print(f"Compte '{username}' ({role}) créé.")
     finally:
         conn.close()
-    print(f"Compte '{username}' ({role}) prêt.")
 
 
 if __name__ == "__main__":
-    admin_user = os.environ.get("SEED_ADMIN_USER", "dr.martin")
-    admin_password = os.environ.get("SEED_ADMIN_PASSWORD")
-    secretary_user = os.environ.get("SEED_SECRETARY_USER", "secretariat")
-    secretary_password = os.environ.get("SEED_SECRETARY_PASSWORD")
-
-    if not admin_password or not secretary_password:
-        sys.exit(
-            "SEED_ADMIN_PASSWORD et SEED_SECRETARY_PASSWORD doivent être définis dans .env "
-            "avant de lancer ce script (pas de mot de passe par défaut en dur)."
-        )
-
-    create_account(admin_user, admin_password, "medecin", "Dr Martin")
-    create_account(secretary_user, secretary_password, "secretaire", "Secrétariat")
+    main()

@@ -1,0 +1,9 @@
+[Unit]
+Description=Sauvegarde nocturne de la base, avant la purge de 3 h
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

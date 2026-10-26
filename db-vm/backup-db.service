@@ -1,0 +1,8 @@
+[Unit]
+Description=Sauvegarde nocturne de la base medical_office
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/debian/medical-office-db/backup-db.sh

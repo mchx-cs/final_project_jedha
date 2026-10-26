@@ -19,7 +19,7 @@ flowchart LR
 | Machine | VLAN | Adresse | Rôle | Compte PostgreSQL |
 | --- | --- | --- | --- | --- |
 | `dmz-rdv` | 60 | 192.168.60.2 | Formulaire public de demande de rendez-vous | `booking_user` — `INSERT` sur une table |
-| `web-medical` | 50 | 192.168.50.3 | Portail du personnel : dossiers patients, traitement des demandes | `app_user` — lecture/écriture sur trois tables |
+| `web-medical` | 50 | 192.168.50.3 | Portail du personnel : dossiers patients, traitement des demandes | `app_user` — personnel, patients, tentatives de connexion ; lecture et traitement des demandes |
 | `db-medical` | 50 | 192.168.50.2 | PostgreSQL 16, aucun autre service | superuser, joignable en local uniquement |
 
 Masque `/24`, passerelle `.1` de chaque VLAN (pfSense). Les adresses sont fixes sur les
@@ -49,11 +49,17 @@ Accès :
 | `192.168.50.3` | `192.168.50.2` | 5432 | Même VLAN : `DOCKER-USER` et `pg_hba.conf` seulement |
 | Les trois machines | `WAZUH01` `192.168.30.20` | 1514 | pfSense (1515 refermé une fois les agents enregistrés) |
 | VLAN 30 (administration) | Les trois machines | 22 | pfSense |
-| Tout le reste | `192.168.50.2` | — | Refusé par pfSense, puis par `DOCKER-USER` |
+| Tout le reste | `192.168.50.2` | 5432 | `DOCKER-USER`, puis `pg_hba.conf` ; pfSense en amont selon le VLAN |
 
 La DMZ ne joint ni le portail, ni le contrôleur de domaine, ni Internet : seuls la base,
 Wazuh et son DNS public lui sont ouverts. Reconstruire son image demande donc une
-ouverture temporaire. Le VLAN 50 n'a pas d'accès à Internet.
+ouverture temporaire. Le VLAN 50 n'a pas besoin d'Internet en fonctionnement ; au
+26 octobre, pfSense lui ouvre encore DNS, HTTP et HTTPS vers l'extérieur (mises à jour,
+dépôt Git), une ouverture qui gagnerait à n'être active que pendant les mises à jour.
+
+La protection de la base ne dépend pas de pfSense seul. Le VLAN d'administration y a
+un accès TCP large ; une connexion au port 5432 depuis ce VLAN, laissée passer par
+pfSense, est arrêtée par `DOCKER-USER`, et le serait sinon par `pg_hba.conf`.
 
 ## Mesures de sécurité
 
@@ -62,7 +68,7 @@ ouverture temporaire. Le VLAN 50 n'a pas d'accès à Internet.
 | Risque | Mesure |
 | --- | --- |
 | Injection SQL | Requêtes paramétrées exclusivement |
-| XSS | Auto-échappement Jinja2 |
+| XSS | Auto-échappement Jinja2, et `Content-Security-Policy` stricte |
 | CSRF | Jeton vérifié sur chaque formulaire |
 | Écoute réseau | TLS obligatoire, HTTP redirigé, HSTS |
 | Divulgation | `server_tokens off`, en-têtes de sécurité portés par nginx seul |
@@ -74,12 +80,20 @@ ouverture temporaire. Le VLAN 50 n'a pas d'accès à Internet.
 
 Mots de passe hachés en bcrypt coût 12. Cookies `Secure`, `HttpOnly`, `SameSite=Lax`.
 Deux limites contre le bruteforce : cinq tentatives par minute et par adresse (nginx), et un
-délai croissant par identifiant (application) : quatre échecs libres, puis 15 s, 30 s,
-jusqu'à 15 minutes, sans verrouillage définitif. Un mot de passe est toujours vérifié, même
+délai croissant par identifiant (application) : cinq échecs libres, puis 15 s, 30 s,
+jusqu'à 15 minutes, sans verrouillage définitif. Les échecs de plus d'une heure, devenus
+inutiles, sont purgés chaque nuit. Un mot de passe est toujours vérifié, même
 pour un identifiant inexistant, pour que le temps de réponse ne révèle pas quels comptes
 existent. Rôles `medecin` et
 `secretaire`, la suppression d'un dossier étant réservée au médecin. Chaque traitement de
-demande enregistre son auteur et son horodatage.
+demande enregistre son auteur et son horodatage. Une session inactive depuis trente minutes
+expire : les postes de l'accueil sont partagés.
+
+La `Content-Security-Policy` n'autorise qu'un seul script, la confirmation de suppression
+d'un dossier, désigné par son empreinte SHA-256 : une donnée saisie sur le site public et
+affichée dans le portail ne peut pas exécuter de code. Les mots de passe du personnel ne
+sont stockés nulle part en clair : `seed.py` les demande à l'écran à la création des
+comptes, et seul leur hachage est enregistré.
 
 ### Site public
 
@@ -96,6 +110,8 @@ Protection contre les dépôts massifs, en trois couches :
 3. **Trigger PostgreSQL** : au plus trois demandes en attente par numéro de téléphone, et
    cinq cents au total. Le refus est distingué d'une panne : le patient voit un message
    explicite (HTTP 429), et le journal enregistre un événement `booking_refused_flood`.
+   Les insertions passent une par une dans ce contrôle (verrou consultatif) : des demandes
+   envoyées au même instant ne peuvent pas dépasser les seuils (race condition).
 
 **Aucun compte patient** : le formulaire est anonyme et le cabinet rappelle. Il n'y a donc
 ni base de mots de passe patients à protéger, ni réinitialisation à sécuriser, ni
@@ -134,9 +150,10 @@ sudo docker compose up -d
 sudo ./002-appointments.sh    # table des demandes et rôle booking_user
 sudo ./003-anti-flood.sh      # trigger anti-flood
 sudo ./004-login-attempts.sh  # délai croissant du portail
-sudo cp protect-db.service purge-demandes.service purge-demandes.timer /etc/systemd/system/
+sudo cp protect-db.service purge-demandes.service purge-demandes.timer \
+        backup-db.service backup-db.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now protect-db.service purge-demandes.timer
+sudo systemctl enable --now protect-db.service purge-demandes.timer backup-db.timer
 ```
 
 Le script d'initialisation ne s'exécute qu'au premier démarrage du conteneur : le `.env`
@@ -149,7 +166,7 @@ copié dans `/home/debian/medical-office-db`.
 cp .env.example .env && chmod 600 .env   # DB_HOST=192.168.50.2
 ./nginx/generate-cert.sh
 sudo docker compose build && sudo docker compose up -d
-sudo docker compose exec app python seed.py
+sudo docker compose exec app python seed.py   # demande les mots de passe à l'écran
 ```
 
 ### 3. Site public — dmz-rdv
@@ -181,17 +198,25 @@ sudo docker compose up -d
 ```
 
 Tout redémarre seul avec les machines : conteneurs, filtrage `DOCKER-USER`
-(`protect-db.service`), purge nocturne (`purge-demandes.timer`) et publication
+(`protect-db.service`), sauvegarde nocturne (`backup-db.timer`), purge nocturne
+(`purge-demandes.timer`) et publication
 (`publish-portal.service`).
 
 L'administration se fait par les consoles GNS3. Avant de fermer une console, toujours
 taper `exit` jusqu'à revoir `login:` : les consoles restent dans l'état où on les laisse,
 et sont joignables par tout le lab.
 
-Sauvegarde, sur `db-medical` :
+Sauvegarde : automatique chaque nuit à 2 h 30, avant la purge (`backup-db.timer`), dans
+`~/backups` sur `db-medical` (dossier en `700`, fichiers en `600`). Les sept dumps les plus
+récents sont conservés ; un dump interrompu n'est jamais gardé. Sauvegarde immédiate :
+`sudo systemctl start backup-db.service`.
+
+Restauration, vérifiée dans une base temporaire avant toute restauration réelle :
 
 ```bash
-sudo docker compose exec -T db pg_dump -U postgres_admin medical_office | gzip > ~/backups/medical_office-$(date +%F).sql.gz
+sudo docker compose exec -T db createdb -U postgres_admin restauration_test
+gunzip -c ~/backups/<dump>.sql.gz | sudo docker compose exec -T db psql -U postgres_admin -d restauration_test -q
+sudo docker compose exec -T db dropdb -U postgres_admin restauration_test
 ```
 
 Les trois machines remontent leurs journaux à Wazuh (`WAZUH01`, `192.168.30.20`).
@@ -251,7 +276,12 @@ La ligne `local … trust` de `pg_hba.conf` laisse tout compte de la machine bas
 connecter sans mot de passe depuis le conteneur. Le plafond global de cinq cents demandes
 en attente peut être atteint volontairement, ce qui bloque les vrais patients jusqu'au
 traitement des demandes. Le champ de précisions du formulaire public est libre : seul un
-avertissement dissuade d'y écrire une information médicale. L'administration SSH reste
+avertissement dissuade d'y écrire une information médicale. Les notes médicales ne sont
+pas chiffrées au repos : leur confidentialité repose sur les droits d'accès à la base et
+à la machine. Les images des applications embarquent encore `gcc` et `libpq-dev`,
+inutiles avec `psycopg2-binary`. La déconnexion du portail se fait par un simple lien :
+un site tiers peut déconnecter un membre du personnel, sans accès à ses données.
+L'administration SSH reste
 par mot de passe : le VLAN 30 n'a pas de poste capable de SSH, et l'administration passe
 par les consoles GNS3. SSH et nginx écoutent aussi en IPv6, limité au VLAN, que le
 filtrage `DOCKER-USER` (IPv4) ne couvre pas.
@@ -279,7 +309,11 @@ filtrage `DOCKER-USER` (IPv4) ne couvre pas.
 │   ├── purge-demandes.sh       Purge des demandes de plus de six mois
 │   ├── purge-demandes.service
 │   ├── purge-demandes.timer    Chaque nuit à 3 h
+│   ├── backup-db.sh            Sauvegarde, sept dumps conservés
+│   ├── backup-db.service
+│   ├── backup-db.timer         Chaque nuit à 2 h 30
 │   └── provision-debian.sh     Préparation d'une machine neuve
+├── docs/                   Schéma de la base, droits et accès (PDF)
 └── gns3/                   VM GNS3
     ├── publish-portal.sh       Redirection 8444 vers le WAN de pfSense
     └── publish-portal.service
