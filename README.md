@@ -85,7 +85,10 @@ jusqu'à 15 minutes, sans verrouillage définitif. Les échecs de plus d'une heu
 inutiles, sont purgés chaque nuit. Un mot de passe est toujours vérifié, même
 pour un identifiant inexistant, pour que le temps de réponse ne révèle pas quels comptes
 existent. Rôles `medecin` et
-`secretaire`, la suppression d'un dossier étant réservée au médecin. Chaque traitement de
+`secretaire` : les notes médicales (saisie et lecture) et la suppression d'un dossier sont
+réservées au médecin, contrôlées côté serveur ; la secrétaire voit l'identité des patients,
+pas leurs notes. Chaque consultation d'un dossier est journalisée (`patient_viewed`), comme
+chaque accès refusé (`access_denied`). Chaque traitement de
 demande enregistre son auteur et son horodatage. Une session inactive depuis trente minutes
 expire : les postes de l'accueil sont partagés.
 
@@ -281,6 +284,8 @@ pas chiffrées au repos : leur confidentialité repose sur les droits d'accès �
 à la machine. Les images des applications embarquent encore `gcc` et `libpq-dev`,
 inutiles avec `psycopg2-binary`. La déconnexion du portail se fait par un simple lien :
 un site tiers peut déconnecter un membre du personnel, sans accès à ses données.
+Le médecin et la secrétaire partagent le même compte de base, `app_user` : la réserve
+des notes médicales est assurée par le portail, pas par PostgreSQL.
 L'administration SSH reste
 par mot de passe : le VLAN 30 n'a pas de poste capable de SSH, et l'administration passe
 par les consoles GNS3. SSH et nginx écoutent aussi en IPv6, limité au VLAN, que le

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Dossier patient{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ patient.last_name }} {{ patient.first_name }}</h1>
+  <p class="muted">
+    Né(e) le {{ patient.date_of_birth }}
+    · dossier créé le {{ patient.created_at.strftime('%Y-%m-%d') }}
+    {% if patient.created_by_name %}par {{ patient.created_by_name }}{% endif %}
+  </p>
+  <h2>Notes médicales</h2>
+  {% if patient.notes %}
+  <p style="white-space: pre-wrap;">{{ patient.notes }}</p>
+  {% else %}
+  <p class="muted">Aucune note.</p>
+  {% endif %}
+  <p><a class="btn" href="{{ url_for('patients_list') }}">Retour à la liste</a></p>
+</div>
+{% endblock %}

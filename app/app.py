@@ -62,6 +62,8 @@ def role_required(*roles):
         @wraps(view)
         def wrapped(*args, **kwargs):
             if session.get("role") not in roles:
+                logger.warning("access_denied path=%s user=%s ip=%s",
+                               request.path, session.get("full_name"), request.remote_addr)
                 abort(403)
             return view(*args, **kwargs)
         return wrapped
@@ -209,11 +211,45 @@ def patients_list():
     return render_template("patients.html", patients=patients)
 
 
+@app.route("/patients/<int:patient_id>")
+@login_required
+@role_required("medecin")  # les notes médicales ne sont lues que par le médecin
+def patients_view(patient_id):
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT p.id, p.first_name, p.last_name, p.date_of_birth, p.notes,
+                          p.created_at, s.full_name AS created_by_name
+                   FROM patients p
+                   LEFT JOIN staff s ON s.id = p.created_by
+                   WHERE p.id = %s""",
+                (patient_id,),
+            )
+            patient = cur.fetchone()
+    finally:
+        conn.close()
+    if patient is None:
+        abort(404)
+    # Trace de chaque consultation d'un dossier médical : qui, lequel, quand.
+    logger.info("patient_viewed id=%s by=%s ip=%s",
+                patient_id, session.get("full_name"), request.remote_addr)
+    return render_template("patient.html", patient=patient)
+
+
 @app.route("/patients/new", methods=["GET", "POST"])
 @login_required
 def patients_new():
     form = PatientForm()
     if form.validate_on_submit():
+        # Seul le médecin écrit des notes médicales. Le champ n'est pas affiché
+        # à la secrétaire, et le serveur ignore des notes envoyées malgré tout.
+        notes = form.notes.data or None
+        if session.get("role") != "medecin":
+            if notes:
+                logger.warning("notes_ignored by=%s ip=%s",
+                               session.get("full_name"), request.remote_addr)
+            notes = None
         conn = get_db()
         try:
             with conn.cursor() as cur:
@@ -221,7 +257,7 @@ def patients_new():
                     """INSERT INTO patients (first_name, last_name, date_of_birth, notes, created_by)
                        VALUES (%s, %s, %s, %s, %s)""",
                     (form.first_name.data, form.last_name.data, form.date_of_birth.data,
-                     form.notes.data, session["user_id"]),
+                     notes, session["user_id"]),
                 )
             conn.commit()
         finally:

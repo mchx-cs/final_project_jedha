@@ -8,7 +8,7 @@
     <tr><th>Nom</th><th>Prénom</th><th>Naissance</th>{% if session.get('role') == 'medecin' %}<th></th>{% endif %}</tr>
     {% for p in patients %}
     <tr>
-      <td>{{ p.last_name }}</td>
+      <td>{% if session.get('role') == 'medecin' %}<a href="{{ url_for('patients_view', patient_id=p.id) }}">{{ p.last_name }}</a>{% else %}{{ p.last_name }}{% endif %}</td>
       <td>{{ p.first_name }}</td>
       <td>{{ p.date_of_birth }}</td>
       {% if session.get('role') == 'medecin' %}

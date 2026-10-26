@@ -11,8 +11,10 @@
     {{ form.last_name() }}
     <label>{{ form.date_of_birth.label }}</label>
     {{ form.date_of_birth() }}
+    {% if session.get('role') == 'medecin' %}
     <label>{{ form.notes.label }}</label>
     {{ form.notes(rows=4) }}
+    {% endif %}
     <div style="margin-top:20px;">
       <button type="submit">Enregistrer</button>
     </div>
