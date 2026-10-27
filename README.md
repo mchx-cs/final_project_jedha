@@ -87,7 +87,8 @@ pour un identifiant inexistant, pour que le temps de réponse ne révèle pas qu
 existent. Rôles `medecin` et
 `secretaire` : les notes médicales (saisie et lecture) et la suppression d'un dossier sont
 réservées au médecin, contrôlées côté serveur ; la secrétaire voit l'identité des patients,
-pas leurs notes. Chaque consultation d'un dossier est journalisée (`patient_viewed`), comme
+pas leurs notes. À l'inverse, seul le secrétariat confirme ou refuse une demande de rendez-vous ;
+le médecin les consulte. Chaque consultation d'un dossier est journalisée (`patient_viewed`), comme
 chaque accès refusé (`access_denied`). Chaque traitement de
 demande enregistre son auteur et son horodatage. Une session inactive depuis trente minutes
 expire : les postes de l'accueil sont partagés.

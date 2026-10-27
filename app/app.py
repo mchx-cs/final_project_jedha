@@ -311,6 +311,7 @@ def appointments_list():
 
 @app.route("/rendez-vous/<int:appointment_id>/<decision>", methods=["POST"])
 @login_required
+@role_required("secretaire")  # seul le secrétariat confirme ou refuse une demande
 def appointments_handle(appointment_id, decision):
     if decision not in ("confirme", "refuse"):
         abort(400)

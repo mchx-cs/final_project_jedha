@@ -28,6 +28,7 @@
       <td>{{ d.requested_date }}<div class="muted">{{ d.slot }}</div></td>
       {% if statut == 'demande' %}
       <td style="white-space:nowrap;">
+        {% if session.get('role') == 'secretaire' %}
         <form method="post" action="{{ url_for('appointments_handle', appointment_id=d.id, decision='confirme') }}" style="display:inline;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn" type="submit">Confirmer</button>
@@ -36,6 +37,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn danger" type="submit">Refuser</button>
         </form>
+        {% else %}<span class="muted">À traiter par le secrétariat</span>{% endif %}
       </td>
       {% else %}
       <td class="muted">{{ d.handled_by_name or '—' }}</td>
