@@ -16,15 +16,15 @@ PUB_PORT="8444"
 WAN_IP="192.168.122.86"    # interface WAN de pfSense
 
 # Redirection : ajoutée une seule fois
-iptables -t nat -C PREROUTING -d "$PUB_IP" -p tcp --dport "$PUB_PORT" \
+iptables -w -t nat -C PREROUTING -d "$PUB_IP" -p tcp --dport "$PUB_PORT" \
          -j DNAT --to-destination "$WAN_IP:443" 2>/dev/null \
-  || iptables -t nat -A PREROUTING -d "$PUB_IP" -p tcp --dport "$PUB_PORT" \
+  || iptables -w -t nat -A PREROUTING -d "$PUB_IP" -p tcp --dport "$PUB_PORT" \
          -j DNAT --to-destination "$WAN_IP:443"
 
 # Autorisation : insérée en tête, avant les règles de libvirt qui refusent
 # les connexions entrantes vers virbr0
-iptables -C FORWARD -d "$WAN_IP" -p tcp --dport 443 -j ACCEPT 2>/dev/null \
-  || iptables -I FORWARD -d "$WAN_IP" -p tcp --dport 443 -j ACCEPT
+iptables -w -C FORWARD -d "$WAN_IP" -p tcp --dport 443 -j ACCEPT 2>/dev/null \
+  || iptables -w -I FORWARD -d "$WAN_IP" -p tcp --dport 443 -j ACCEPT
 
-iptables -t nat -S PREROUTING | grep -- "--dport $PUB_PORT"
-iptables -S FORWARD | grep -- "-d $WAN_IP"
+iptables -w -t nat -S PREROUTING | grep -- "--dport $PUB_PORT"
+iptables -w -S FORWARD | grep -- "-d $WAN_IP"
